@@ -1,0 +1,96 @@
+{
+  "nav": {
+    "flash": "Flash",
+    "download": "Download",
+    "github": "GitHub"
+  },
+  "hero": {
+    "eyebrow": "Portable BLE voice input",
+    "title": "VoiceStick",
+    "lead": "A compact voice stick based on M5Stack StickS3. It connects to macOS or Windows over BLE, uses the Doubao speech foundation model for recognition, and turns real-time feedback into text at your cursor.",
+    "downloadMac": "Download macOS",
+    "downloadWindows": "Download Windows",
+    "flash": "Flash firmware online",
+    "source": "View source",
+    "imageAlt": "VoiceStick portable voice input device based on M5Stack StickS3"
+  },
+  "features": {
+    "label": "Features",
+    "ble": {
+      "title": "Low-power BLE",
+      "body": "Pair the StickS3 in your hand over Bluetooth Low Energy. It is wireless, efficient, and ready to stay on your desk or travel with your laptop."
+    },
+    "model": {
+      "title": "Doubao speech foundation model",
+      "body": "VoiceStick uses the Doubao speech foundation model for recognition, making spoken Chinese, longer sentences, and everyday phrasing feel fast to turn into editable text."
+    },
+    "feedback": {
+      "title": "Live text feedback",
+      "body": "Recognition appears as live feedback on screen, then the final text is confirmed before it is inserted into the current input field."
+    }
+  },
+  "story": {
+    "eyebrow": "Small, portable, always nearby",
+    "title": "Pick it up to speak. Put it down to keep writing.",
+    "body": "VoiceStick turns M5Stack StickS3 into a dedicated voice input button. Keep it near your keyboard, slip it into a pocket, or carry it with your laptop. Hold to talk, and the recognized text comes back to your cursor."
+  },
+  "flasher": {
+    "eyebrow": "Direct browser connection",
+    "title": "Flash firmware online",
+    "body": "Use Chrome or Edge to write the latest Release firmware to M5Stack StickS3 over USB serial. The firmware comes from GitHub Releases, so no local flashing tools are required.",
+    "steps": {
+      "usb": "Connect the StickS3 to your computer with USB-C.",
+      "boot": "If connection fails, hold the side reset button until the internal green LED blinks, then release it.",
+      "flash": "Click start and choose the StickS3 USB serial port."
+    },
+    "button": {
+      "start": "Start flashing",
+      "flashing": "Flashing",
+      "download": "Download firmware"
+    },
+    "status": {
+      "idle": "Ready",
+      "connecting": "Connecting",
+      "downloading": "Downloading firmware",
+      "flashing": "Writing Flash",
+      "resetting": "Resetting device",
+      "done": "Flash complete",
+      "error": "Flash failed",
+      "unsupported": "Unsupported browser"
+    },
+    "meta": {
+      "target": "ESP32-S3 / StickS3"
+    },
+    "firmware": {
+      "latest": "VoiceStick StickS3 firmware will be fetched from the latest GitHub Release.",
+      "ready": "Firmware loaded: {size}"
+    },
+    "unsupported": "This browser does not support Web Serial. Open this page in desktop Chrome or Edge.",
+    "log": {
+      "empty": "Logs will appear here.",
+      "selectPort": "Waiting for USB serial port selection...",
+      "connecting": "Syncing ESP32-S3 bootloader...",
+      "downloading": "Downloading Release firmware...",
+      "downloaded": "Firmware downloaded: {size}",
+      "flashing": "Writing merged firmware to 0x0...",
+      "done": "Flashing complete. A reset signal was sent to the device."
+    },
+    "error": {
+      "downloadFailed": "Firmware download failed, HTTP {status}",
+      "wrongChip": "Detected {chip}. Please connect an M5Stack StickS3."
+    }
+  },
+  "download": {
+    "title": "Need another file?",
+    "body": "GitHub Releases also include checksums, appcast assets, and firmware images.",
+    "cta": "View all release assets"
+  },
+  "footer": {
+    "appcast": "Appcast"
+  },
+  "language": {
+    "zh": "中",
+    "en": "EN",
+    "label": "Switch language"
+  }
+}
