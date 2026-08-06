@@ -35,6 +35,7 @@ esp_err_t stick_s3_board_battery_level(int *level_percent);
 esp_err_t stick_s3_board_battery_charging(bool *charging);
 esp_err_t stick_s3_board_usb_powered(bool *usb_powered);
 esp_err_t stick_s3_board_clear_power_irqs(uint8_t *sys_status);
+esp_err_t stick_s3_board_set_speaker_amp(bool enabled);
 void stick_s3_board_prepare_deep_sleep(void);
 bool stick_s3_front_button_pressed(void);
 bool stick_s3_side_button_pressed(void);
