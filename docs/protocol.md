@@ -1,4 +1,4 @@
-# Voice Stick Protocol
+# XC Buddy Protocol
 
 This document describes the protocol implemented by the current firmware and macOS desktop app.
 
@@ -6,12 +6,12 @@ This document describes the protocol implemented by the current firmware and mac
 
 - Low-latency push-to-talk audio from StickS3 to macOS.
 - Opus over BLE to keep wireless bandwidth low.
-- Ogg Opus forwarding from macOS to either Volcengine ASR or the VoiceStick Cloud relay.
+- Ogg Opus forwarding from macOS to NVIDIA Inference.
 - Final ASR text insertion into the focused macOS input field after release and confirmation.
 
 ## BLE GATT
 
-Device name: `VS-XXXX`, where `XXXX` is derived from the last two bytes of the device eFuse MAC.
+Device name: `XC-XXXX`, where `XXXX` is derived from the last two bytes of the device eFuse MAC.
 
 Service UUID:
 
@@ -29,7 +29,7 @@ Characteristics:
 | `ota_rx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5104` | Mac -> StickS3 | write, write without response |
 | `ota_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5105` | StickS3 -> Mac | notify |
 
-The desktop app scans for this service and only connects to devices whose `VS-XXXX` ID is present in the local paired-device list. Multiple paired devices may be connected at the same time; audio, state, control, and OTA handling are scoped by CoreBluetooth peripheral identity.
+The desktop app scans for this service and only connects to devices whose `XC-XXXX` ID is present in the local paired-device list. Multiple paired devices may be connected at the same time; audio, state, control, and OTA handling are scoped by CoreBluetooth peripheral identity.
 
 ## Audio Frame
 
@@ -103,6 +103,9 @@ Current desktop events:
 {"event":"ui_state","state":"recording","text":""}
 {"event":"ui_state","state":"thinking","text":"partial text"}
 {"event":"ui_state","state":"pending_confirmation","text":"final text"}
+{"event":"ui_state","state":"codex_working","text":"Codex is working"}
+{"event":"ui_state","state":"approval_needed","text":"Approval needed"}
+{"event":"ui_state","state":"codex_done","text":"Turn complete"}
 {"event":"ui_state","state":"error","text":"ASR timeout"}
 {"event":"interaction_mode","mode":"hold_to_talk"}
 {"event":"interaction_mode","mode":"click_to_talk"}
@@ -120,6 +123,9 @@ Chinese glyphs; `text` is used only to choose fixed English hints.
 `click_to_talk` starts audio on the first primary click and stops on the next
 primary click.
 
+In firmware `0.1.1` and later, `codex_done` displays the running firmware
+version for five seconds and then returns the device to `ready` automatically.
+
 Deprecated app-to-firmware events:
 
 | Event | Replacement | Reason |
@@ -136,7 +142,10 @@ Deprecated app-to-firmware events:
 The firmware uses a custom OTA channel over the same Voice Stick service. The macOS app writes OTA `begin` and `end` frames with BLE write-with-response, and streams OTA `data` frames with write-without-response using CoreBluetooth flow control.
 The device sends progress notifications roughly every 32 KB of accepted firmware data.
 
-The macOS app starts OTA for one connected device at a time. It discovers updates from the latest firmware manifest, downloads the manifest `ota_url`, verifies byte size and SHA-256, then sends the verified app-slot image over BLE. The browser flasher uses the manifest `merged_url` instead because USB flashing writes a merged image at offset `0x0`.
+XC Buddy discovers published firmware anonymously from this repository's latest
+public GitHub Release. It accepts only `xc-buddy-sticks3-ota.bin`, verifies the
+GitHub asset size and SHA-256 digest, and then transfers it through this BLE OTA
+channel. The merged image remains restricted to manual USB flashing.
 
 The 8 MB flash layout uses two 3 MB OTA app slots and keeps the remaining flash as a reserved SPIFFS data partition:
 
@@ -238,51 +247,23 @@ Recordings shorter than 0.5 seconds are discarded locally and are not sent to AS
 
 ## ASR Transport
 
-The desktop app can connect either directly to Volcengine or to VoiceStick Cloud. Both providers use the same WebSocket binary framing in the client, so request, audio, response, and error handling are shared.
-
-Volcengine endpoint:
-
-```text
-wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
-```
-
-VoiceStick Cloud default endpoint:
-
-```text
-wss://api.xiaozhi.me/voicestick/asr/
-```
-
-The first request payload currently sent by the desktop app is:
+The desktop app buffers incoming Ogg/Opus audio and sends it to the NVIDIA
+Inference OpenAI-compatible chat-completions endpoint after recording ends.
+Audio is base64 encoded in an `input_audio` content item:
 
 ```json
 {
-  "user": {"uid": "voice-stick-local"},
-  "audio": {
-    "format": "ogg",
-    "codec": "opus",
-    "rate": 16000,
-    "bits": 16,
-    "channel": 1
-  },
-  "request": {
-    "model_name": "bigmodel",
-    "enable_nonstream": true,
-    "show_utterances": false,
-    "enable_ddc": true
-  }
+  "model": "gcp/google/gemini-3.6-flash",
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "input_audio", "input_audio": {"data": "<base64 Ogg/Opus>", "format": "ogg"}},
+      {"type": "text", "text": "<transcription prompt and hotwords>"}
+    ]
+  }]
 }
 ```
 
-The desktop app buffers Ogg chunks until the recording reaches 0.5 seconds, then starts ASR and flushes the buffered chunks. On button release, it sends the final Ogg chunk with the WebSocket last-packet flag and waits for the final response.
-
-VoiceStick Cloud business errors should use the same error frame shape as Volcengine: message type `0x0f`, a four-byte big-endian error code, a four-byte big-endian message size, and a UTF-8 message. For quota or billing errors, the message should be JSON so the desktop app can surface an upgrade action:
-
-```json
-{
-  "error": "quota_exceeded",
-  "message": "Daily free quota has been used up.",
-  "upgrade_url": "https://voicestick.app/account/billing"
-}
-```
-
-See `docs/volcengine-asr.md` for the trimmed Volcengine API notes used by the desktop app.
+Recordings shorter than 0.5 seconds are discarded before an inference request.
+The transcript is read from `choices[0].message.content`. See
+`docs/internal-transcription.md` for the complete request contract.
