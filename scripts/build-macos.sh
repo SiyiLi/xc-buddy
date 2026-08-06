@@ -7,10 +7,10 @@
 #   build/XC-Buddy-<version>.signature  (when Sparkle sign_update is available)
 #
 # Optional environment:
-#   VOICESTICK_APPCAST_URL=https://78.github.io/voicestick/appcast.xml
+#   XC_BUDDY_APPCAST_URL=https://raw.githubusercontent.com/SiyiLi/xc-buddy/main/website/public/appcast.xml
 #   SPARKLE_PUBLIC_ED_KEY=<public key from Sparkle generate_keys>
 #   SPARKLE_PRIVATE_ED_KEY=<private key exported by Sparkle generate_keys -x>
-#   SPARKLE_KEY_ACCOUNT=voicestick
+#   SPARKLE_KEY_ACCOUNT=xc-buddy
 
 set -euo pipefail
 
@@ -18,11 +18,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$SCRIPT_DIR/.."
 DESKTOP_DIR="$ROOT_DIR/desktop/macos"
 BUILD_DIR="$ROOT_DIR/build"
-PLIST="$DESKTOP_DIR/Sources/VoiceStickApp/Info.plist"
+PLIST="$DESKTOP_DIR/Sources/XCBuddy/Info.plist"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 CONFIG="${1:---release}"
 TARGET_ARCHS="arm64 x86_64"
-SPARKLE_KEY_ACCOUNT="${SPARKLE_KEY_ACCOUNT:-voicestick}"
+SPARKLE_KEY_ACCOUNT="${SPARKLE_KEY_ACCOUNT:-xc-buddy}"
 
 case "$CONFIG" in
     --release)
@@ -52,8 +52,8 @@ echo "===================================="
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 
-if [ -n "${VOICESTICK_APPCAST_URL:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Set :SUFeedURL $VOICESTICK_APPCAST_URL" "$PLIST"
+if [ -n "${XC_BUDDY_APPCAST_URL:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Set :SUFeedURL $XC_BUDDY_APPCAST_URL" "$PLIST"
 fi
 
 if [ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]; then
@@ -65,7 +65,7 @@ fi
 
 for ARCH in $TARGET_ARCHS; do
     echo ""
-    echo "Building VoiceStickApp for $ARCH..."
+    echo "Building XCBuddy for $ARCH..."
     SCRATCH="$DESKTOP_DIR/.build-$ARCH"
     rm -rf "$SCRATCH"
     swift build \
@@ -85,9 +85,9 @@ X86_BUILD="$DESKTOP_DIR/.build-x86_64/x86_64-apple-macosx/$SWIFT_CONFIG"
 echo ""
 echo "Creating universal executable..."
 lipo -create \
-    "$ARM_BUILD/VoiceStickApp" \
-    "$X86_BUILD/VoiceStickApp" \
-    -output "$APP_DIR/Contents/MacOS/VoiceStickApp"
+    "$ARM_BUILD/XCBuddy" \
+    "$X86_BUILD/XCBuddy" \
+    -output "$APP_DIR/Contents/MacOS/XCBuddy"
 
 cp "$PLIST" "$APP_DIR/Contents/Info.plist"
 
@@ -101,7 +101,7 @@ fi
 SPARKLE_FRAMEWORK="$(find -L "$DESKTOP_DIR/.build-arm64/artifacts" -name Sparkle.framework -type d 2>/dev/null | head -1 || true)"
 if [ -n "$SPARKLE_FRAMEWORK" ]; then
     cp -R "$SPARKLE_FRAMEWORK" "$APP_DIR/Contents/Frameworks/"
-    install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP_DIR/Contents/MacOS/VoiceStickApp" 2>/dev/null || true
+    install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP_DIR/Contents/MacOS/XCBuddy" 2>/dev/null || true
 else
     echo "WARNING: Sparkle.framework was not found in SwiftPM artifacts."
 fi

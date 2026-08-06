@@ -8,7 +8,7 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
-        .executable(name: "VoiceStickApp", targets: ["VoiceStickApp"])
+        .executable(name: "XCBuddy", targets: ["XCBuddy"])
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
@@ -16,27 +16,21 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "VoiceStickApp",
+            name: "XCBuddy",
             dependencies: [
-                "CZlib",
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ],
-            path: "Sources/VoiceStickApp",
+            path: "Sources/XCBuddy",
             exclude: ["Info.plist"],
             linkerSettings: [
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",
-                    "-Xlinker", "Sources/VoiceStickApp/Info.plist",
+                    "-Xlinker", "Sources/XCBuddy/Info.plist",
                 ])
             ]
-        ),
-        .target(
-            name: "CZlib",
-            path: "Sources/CZlib",
-            publicHeadersPath: "."
         )
     ]
 )

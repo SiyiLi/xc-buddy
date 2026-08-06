@@ -57,7 +57,7 @@ final class OggOpusMuxer {
     }
 
     private func opusTags() -> Data {
-        let vendor = Data("VoiceStick".utf8)
+        let vendor = Data("XC Buddy".utf8)
         var data = Data("OpusTags".utf8)
         data.append(contentsOf: UInt32(vendor.count).littleEndianBytes)
         data.append(vendor)

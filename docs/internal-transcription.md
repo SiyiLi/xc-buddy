@@ -5,7 +5,6 @@ XC Buddy uses the existing NVIDIA Inference API through its OpenAI-compatible ch
 ## Verified default
 
 ```toml
-asr_provider = "openai_compatible"
 openai_base_url = "https://inference-api.nvidia.com/v1"
 openai_api_key = "<NVIDIA inference API key>"
 openai_model = "gcp/google/gemini-3.6-flash"

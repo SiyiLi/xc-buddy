@@ -12,7 +12,7 @@ private struct OnboardingDevice {
 final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CBCentralManagerDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private enum Step: Int, CaseIterable {
         case device
-        case provider
+        case transcription
         case accessibility
         case finish
 
@@ -20,8 +20,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
             switch self {
             case .device:
                 return "Pair Device"
-            case .provider:
-                return "ASR Key"
+            case .transcription:
+                return "NVIDIA Key"
             case .accessibility:
                 return "Accessibility"
             case .finish:
@@ -40,25 +40,19 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
 
     private let tableView = NSTableView()
     private let scanStatusLabel = NSTextField(labelWithString: "Scanning")
-    private let providerPopup = NSPopUpButton()
     private let apiKeyField = NSTextField()
-    private let applyTrialAPIKeyButton = NSButton(title: "Apply Trial", target: nil, action: nil)
-    private let resourcePopup = NSPopUpButton()
     private let accessibilityStatusLabel = NSTextField(labelWithString: "")
     private let accessibilitySettingsButton = NSButton(title: "Open Accessibility Settings", target: nil, action: nil)
 
     private var central: CBCentralManager?
     private var devices: [OnboardingDevice] = []
     private var currentStep: Step = .device
-    private var currentDisplayedProvider: ASRProvider
     private var config: AppConfig
     private var didComplete = false
-    private var didConfigureAPIKeyControlConstraints = false
     private let onComplete: (AppConfig) -> Void
 
     init(config: AppConfig, onComplete: @escaping (AppConfig) -> Void) {
         self.config = config
-        self.currentDisplayedProvider = config.asrProvider
         self.onComplete = onComplete
 
         let window = NSWindow(
@@ -73,8 +67,6 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
         window.delegate = self
         accessibilitySettingsButton.target = self
         accessibilitySettingsButton.action = #selector(requestAccessibilityPermission)
-        applyTrialAPIKeyButton.target = self
-        applyTrialAPIKeyButton.action = #selector(applyTrialAPIKey)
         buildContent()
         loadConfigIntoFields()
         renderStep()
@@ -83,12 +75,6 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
             selector: #selector(applicationDidBecomeActive),
             name: NSApplication.didBecomeActiveNotification,
             object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(apiKeyFieldDidChange),
-            name: NSControl.textDidChangeNotification,
-            object: apiKeyField
         )
     }
 
@@ -182,18 +168,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
     }
 
     private func loadConfigIntoFields() {
-        providerPopup.addItems(withTitles: [
-            ASRProvider.voiceStickCloud.displayName,
-            ASRProvider.volcengine.displayName,
-            ASRProvider.openAICompatible.displayName
-        ])
-        providerPopup.target = self
-        providerPopup.action = #selector(providerSelectionChanged)
-        providerPopup.selectItem(withTitle: config.asrProvider.displayName)
-
-        resourcePopup.addItems(withTitles: AppConfig.supportedResourceIDs)
-        resourcePopup.selectItem(withTitle: config.resourceID)
-        apiKeyField.stringValue = apiKey(for: config.asrProvider)
+        apiKeyField.stringValue = config.openAIAPIKey
     }
 
     private func renderStep() {
@@ -208,10 +183,10 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
             titleLabel.stringValue = "Pair XC"
             detailLabel.stringValue = "Choose a nearby XC-XXXX device. XC Buddy needs a paired device before the app can listen."
             contentStack.addArrangedSubview(deviceView())
-        case .provider:
-            titleLabel.stringValue = "Choose your speech provider"
-            detailLabel.stringValue = "Pick the ASR provider and enter the key or endpoint settings it needs."
-            contentStack.addArrangedSubview(providerView())
+        case .transcription:
+            titleLabel.stringValue = "Configure NVIDIA transcription"
+            detailLabel.stringValue = "Enter the NVIDIA Inference API key used to transcribe audio from your XC."
+            contentStack.addArrangedSubview(transcriptionView())
         case .accessibility:
             titleLabel.stringValue = "Allow text insertion"
             detailLabel.stringValue = "XC Buddy pastes recognized text at your cursor, so macOS Accessibility permission is required."
@@ -270,32 +245,12 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
         return stack
     }
 
-    private func providerView() -> NSView {
+    private func transcriptionView() -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
-        stack.addArrangedSubview(row(label: "Provider", control: providerPopup))
-        stack.addArrangedSubview(row(label: "API Key", control: apiKeyControl()))
-        if selectedProvider() == .volcengine {
-            stack.addArrangedSubview(row(label: "Resource ID", control: resourcePopup))
-        }
-        updateApplyTrialButton()
-        return stack
-    }
-
-    private func apiKeyControl() -> NSStackView {
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        if !didConfigureAPIKeyControlConstraints {
-            apiKeyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 190).isActive = true
-            applyTrialAPIKeyButton.widthAnchor.constraint(equalToConstant: 102).isActive = true
-            didConfigureAPIKeyControlConstraints = true
-        }
-        stack.addArrangedSubview(apiKeyField)
-        stack.addArrangedSubview(applyTrialAPIKeyButton)
+        stack.addArrangedSubview(row(label: "API Key", control: apiKeyField))
         return stack
     }
 
@@ -315,7 +270,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
         stack.alignment = .leading
         stack.spacing = 8
         stack.addArrangedSubview(summaryLine("Device", value: config.pairedDeviceIDs.first.map { "XC-\($0)" } ?? "Not paired"))
-        stack.addArrangedSubview(summaryLine("Provider", value: selectedProvider().displayName))
+        stack.addArrangedSubview(summaryLine("Transcription", value: "NVIDIA Inference"))
         stack.addArrangedSubview(summaryLine("Accessibility", value: AXIsProcessTrusted() ? "Allowed" : "Not allowed yet"))
         return stack
     }
@@ -427,49 +382,6 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
         return true
     }
 
-    @objc private func providerSelectionChanged() {
-        saveDisplayedProviderFields()
-        currentDisplayedProvider = selectedProvider()
-        config.asrProvider = currentDisplayedProvider
-        apiKeyField.stringValue = apiKey(for: currentDisplayedProvider)
-        renderStep()
-    }
-
-    @objc private func apiKeyFieldDidChange() {
-        updateApplyTrialButton()
-    }
-
-    @objc private func applyTrialAPIKey() {
-        saveDisplayedProviderFields()
-        guard currentDisplayedProvider == .voiceStickCloud else { return }
-
-        applyTrialAPIKeyButton.isEnabled = false
-        statusLabel.stringValue = "Applying trial API key..."
-        VoiceStickCloudAPI.applyTrialAPIKey(
-            cloudURL: config.voiceStickCloudURL,
-            deviceID: config.pairedDeviceIDs.first
-        ) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.applyTrialAPIKeyButton.isEnabled = true
-                switch result {
-                case .success(.apiKey(let apiKey)):
-                    self.config.voiceStickAPIKey = apiKey
-                    self.apiKeyField.stringValue = apiKey
-                    self.statusLabel.stringValue = "Trial API key applied."
-                    self.updateApplyTrialButton()
-                    self.updateNextButton()
-                case .success(.url(let url)):
-                    self.statusLabel.stringValue = "Opened trial application page."
-                    NSWorkspace.shared.open(url)
-                case .failure(let error):
-                    self.statusLabel.stringValue = "Apply failed: \(error.localizedDescription)"
-                    self.updateApplyTrialButton()
-                }
-            }
-        }
-    }
-
     @objc private func requestAccessibilityPermission() {
         openAccessibilitySettings()
         updateAccessibilityStatus()
@@ -537,14 +449,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
 
     @objc private func goBack() {
         guard let step = Step(rawValue: currentStep.rawValue - 1) else { return }
-        saveDisplayedProviderFields()
+        saveTranscriptionSettings()
         currentStep = step
         renderStep()
     }
 
     @objc private func goNext() {
         statusLabel.stringValue = ""
-        saveDisplayedProviderFields()
+        saveTranscriptionSettings()
 
         if currentStep == .finish {
             do {
@@ -572,14 +484,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
                 statusLabel.stringValue = "Select an XC device first."
                 return false
             }
-        case .provider:
-            if activeAPIKey().isEmpty {
-                statusLabel.stringValue = "Enter the API key for \(selectedProvider().displayName)."
-                return false
-            }
-            if selectedProvider() == .voiceStickCloud,
-               URL(string: config.voiceStickCloudURL.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
-                statusLabel.stringValue = "Enter a valid Cloud URL."
+        case .transcription:
+            if config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                statusLabel.stringValue = "Enter your NVIDIA Inference API key."
                 return false
             }
         case .accessibility:
@@ -619,58 +526,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
         tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     }
 
-    private func selectedProvider() -> ASRProvider {
-        switch providerPopup.titleOfSelectedItem {
-        case ASRProvider.voiceStickCloud.displayName:
-            return .voiceStickCloud
-        case ASRProvider.volcengine.displayName:
-            return .volcengine
-        case ASRProvider.openAICompatible.displayName:
-            return .openAICompatible
-        default:
-            return config.asrProvider
-        }
-    }
-
-    private func apiKey(for provider: ASRProvider) -> String {
-        switch provider {
-        case .voiceStickCloud:
-            return config.voiceStickAPIKey
-        case .volcengine:
-            return config.volcengineAPIKey
-        case .openAICompatible:
-            return config.openAIAPIKey
-        }
-    }
-
-    private func activeAPIKey() -> String {
-        switch selectedProvider() {
-        case .voiceStickCloud:
-            return config.voiceStickAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .volcengine:
-            return config.volcengineAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .openAICompatible:
-            return config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
-    private func saveDisplayedProviderFields() {
-        let key = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch currentDisplayedProvider {
-        case .voiceStickCloud:
-            config.voiceStickAPIKey = key
-        case .volcengine:
-            config.volcengineAPIKey = key
-        case .openAICompatible:
-            config.openAIAPIKey = key
-        }
-        config.asrProvider = selectedProvider()
-        config.resourceID = resourcePopup.titleOfSelectedItem ?? config.resourceID
-    }
-
-    private func updateApplyTrialButton() {
-        let isCloud = selectedProvider() == .voiceStickCloud
-        let isEmpty = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        applyTrialAPIKeyButton.isHidden = !(isCloud && isEmpty)
+    private func saveTranscriptionSettings() {
+        config.openAIAPIKey = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

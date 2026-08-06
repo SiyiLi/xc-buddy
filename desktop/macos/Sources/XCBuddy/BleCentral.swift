@@ -2,7 +2,7 @@ import AppKit
 import CoreBluetooth
 import Foundation
 
-struct ConnectedVoiceStickDevice {
+struct ConnectedXCDevice {
     let name: String
     let deviceID: String
 }
@@ -64,15 +64,15 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var pairedDeviceIDs: Set<String>
     private var central: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
-    private var discoveredDevices: [UUID: ConnectedVoiceStickDevice] = [:]
-    private var connectedDevices: [UUID: ConnectedVoiceStickDevice] = [:]
+    private var discoveredDevices: [UUID: ConnectedXCDevice] = [:]
+    private var connectedDevices: [UUID: ConnectedXCDevice] = [:]
     private var controlCharacteristics: [UUID: CBCharacteristic] = [:]
     private var otaCharacteristics: [UUID: CBCharacteristic] = [:]
     private var firmwareUpdateSession: FirmwareUpdateSession?
     private var interactionMode: InteractionMode = .holdToTalk
     private var isWorkspaceSleeping = false
 
-    var onConnectionChange: (([ConnectedVoiceStickDevice]) -> Void)?
+    var onConnectionChange: (([ConnectedXCDevice]) -> Void)?
     var onAudioFrame: ((UUID, AudioFrame) -> Void)?
     var onStateEvent: ((UUID, StateEvent) -> Void)?
 
@@ -347,16 +347,16 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         return false
     }
 
-    private func connectedDevice(localName: String?, peripheralName: String?) -> ConnectedVoiceStickDevice? {
+    private func connectedDevice(localName: String?, peripheralName: String?) -> ConnectedXCDevice? {
         let advertisedName = localName ?? peripheralName ?? ""
         guard let deviceID = Self.deviceID(from: advertisedName) else { return nil }
-        return ConnectedVoiceStickDevice(
+        return ConnectedXCDevice(
             name: advertisedName.isEmpty ? "XC-\(deviceID)" : advertisedName,
             deviceID: deviceID
         )
     }
 
-    private var currentConnectedDevices: [ConnectedVoiceStickDevice] {
+    private var currentConnectedDevices: [ConnectedXCDevice] {
         connectedDevices.values.sorted { $0.name < $1.name }
     }
 
@@ -491,7 +491,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
     }
 
-    private func knownDevice(for peripheral: CBPeripheral) -> ConnectedVoiceStickDevice? {
+    private func knownDevice(for peripheral: CBPeripheral) -> ConnectedXCDevice? {
         if let device = discoveredDevices[peripheral.identifier] {
             return device
         }
@@ -501,7 +501,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         guard pairedDeviceIDs.count == 1, let deviceID = pairedDeviceIDs.first else {
             return nil
         }
-        return ConnectedVoiceStickDevice(
+        return ConnectedXCDevice(
             name: peripheral.name ?? "XC-\(deviceID)",
             deviceID: deviceID
         )

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-final class VoiceStickCoordinator {
+final class XCBuddyCoordinator {
     private enum PendingPasteState {
         case idle
         case waitingToPaste(text: String)
@@ -129,12 +129,12 @@ final class VoiceStickCoordinator {
     private let subtitleController = SubtitleController()
     private let oggMuxer = OggOpusMuxer(sampleRate: 16_000, channels: 1)
     private let inputInjector = InputInjector()
-    private let firmwareManifestClient = FirmwareManifestClient()
+    private let firmwareReleaseClient = FirmwareReleaseClient()
     private var debugAudioRecorder: DebugAudioRecorder
     private var codexReceiver: CodexEventReceiver?
     private let minimumRecordingDuration: TimeInterval = 0.5
     private let audioEndTimeout: TimeInterval = 1.0
-    private let firmwareManifestCacheDuration: TimeInterval = 24 * 60 * 60
+    private let firmwareReleaseCacheDuration: TimeInterval = 60 * 60
 
     private var mainInputState = MainInputState.ready
     private var receivedAudioFrames = 0
@@ -149,16 +149,14 @@ final class VoiceStickCoordinator {
     private var lastRecoverablePeripheralID: UUID?
     private var pairedDeviceIDs: [String]
     private var firmwareInfoByDeviceID: [String: DeviceFirmwareInfo] = [:]
-    private var latestFirmwareManifest: FirmwareManifest?
-    private var lastFirmwareManifestCheckAt: Date?
-    private var firmwareManifestCheckInFlight = false
-    private var firmwareManifestRefreshTimer: Timer?
-    private var pendingFirmwareUpdatePromptDeviceIDs: Set<String> = []
+    private var latestFirmwareRelease: FirmwareRelease?
+    private var lastFirmwareReleaseCheckAt: Date?
+    private var firmwareReleaseCheckInFlight = false
+    private var firmwareReleaseRefreshTimer: Timer?
     private var errorRecoveryToken = 0
     private var isShowingASRError = false
     private var subtitleCycles: [SubtitleCycleKey: SubtitleCycle] = [:]
     private var activeSubtitleSessions: [UUID: UInt32] = [:]
-    var onFirmwareUpdatePrompt: ((String, String, String, Bool) -> Void)?
 
     init(config: AppConfig, statusController: StatusController) {
         self.config = config
@@ -198,13 +196,13 @@ final class VoiceStickCoordinator {
         configureASRCallbacks()
         startCodexBridge()
         ble.start()
-        checkFirmwareUpdatesIfNeeded(force: false, showErrors: false)
-        startFirmwareManifestRefreshTimer()
+        checkFirmwareUpdatesIfNeeded(force: false)
+        startFirmwareReleaseRefreshTimer()
     }
 
     deinit {
         audioEndTimeoutTimer?.invalidate()
-        firmwareManifestRefreshTimer?.invalidate()
+        firmwareReleaseRefreshTimer?.invalidate()
         codexReceiver?.stop()
     }
 
@@ -217,7 +215,6 @@ final class VoiceStickCoordinator {
             asr.onSegment = nil
             asr.onFinal = nil
             asr.onError = nil
-            asr.onUpgradeURL = nil
             asr.cancel()
             for cycle in subtitleCycles.values {
                 cycle.asr.cancel()
@@ -243,7 +240,7 @@ final class VoiceStickCoordinator {
         asr = makeASRClient(config: config)
         translator = LLMTranslationClient(config: config)
         configureASRCallbacks()
-        statusController.setTranscriptionProvider(config.asrProvider.displayName)
+        statusController.setTranscriptionProvider("NVIDIA Inference")
         if bridgeChanged { startCodexBridge() }
 
         if pairedDeviceIDs != config.pairedDeviceIDs {
@@ -312,11 +309,6 @@ final class VoiceStickCoordinator {
             }
         }
 
-        asr.onUpgradeURL = { [weak self] url, message in
-            DispatchQueue.main.async {
-                self?.presentASRUpgradeAlert(url: url, message: message)
-            }
-        }
     }
 
     private func configureSubtitleASRCallbacks(for cycle: SubtitleCycle) {
@@ -361,64 +353,37 @@ final class VoiceStickCoordinator {
                 )
             }
         }
-        cycle.asr.onUpgradeURL = { url, _ in
-            DispatchQueue.main.async {
-                NSWorkspace.shared.open(url)
-            }
-        }
     }
 
     func updatePairedDeviceIDs(_ deviceIDs: [String]) {
         pairedDeviceIDs = deviceIDs
+        firmwareInfoByDeviceID = firmwareInfoByDeviceID.filter { deviceIDs.contains($0.key) }
         statusController.setPairedDeviceIDs(deviceIDs)
         statusController.setConnectedDevices([])
         statusController.setStatus(deviceIDs.isEmpty ? "Pair XC" : "Ready")
         ble.updatePairedDeviceIDs(deviceIDs)
-    }
-
-    func updateFirmware(from url: URL, for deviceID: String,
-                        progress: @escaping (FirmwareUpdateProgress) -> Void,
-                        completion: @escaping (Result<Void, Error>) -> Void) {
-        do {
-            let image = try Data(contentsOf: url)
-            ble.updateFirmware(image: image, for: deviceID, progress: progress) { result in
-                DispatchQueue.main.async {
-                    completion(result)
-                }
-            }
-        } catch {
-            completion(.failure(error))
-        }
-    }
-
-    func cancelFirmwareUpdate() {
-        ble.cancelFirmwareUpdate()
-    }
-
-    func checkFirmwareUpdatesNow() {
-        checkFirmwareUpdatesIfNeeded(force: true, showErrors: true)
-    }
-
-    func checkFirmwareAfterPairing(deviceID: String) {
-        pendingFirmwareUpdatePromptDeviceIDs.insert(deviceID)
-        checkFirmwareUpdatesIfNeeded(force: true, showErrors: false)
         refreshFirmwareAvailability()
+        checkFirmwareUpdatesIfNeeded(force: false)
     }
 
     func updateFirmwareFromLatest(for deviceID: String,
                                   progress: @escaping (FirmwareUpdateProgress) -> Void,
                                   completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let manifest = latestFirmwareManifest else {
-            completion(.failure(FirmwareManifestClient.FirmwareManifestError.invalidResponse))
+        guard let release = latestFirmwareRelease else {
+            completion(.failure(FirmwareReleaseClient.FirmwareReleaseError.noPublishedRelease))
             return
         }
 
-        firmwareManifestClient.downloadOTA(from: manifest) { [weak self] result in
+        firmwareReleaseClient.downloadOTA(from: release) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(let image):
-                    self.ble.updateFirmware(image: image, for: deviceID, progress: progress) { result in
+                    self.ble.updateFirmware(
+                        image: image,
+                        for: deviceID,
+                        progress: progress
+                    ) { result in
                         DispatchQueue.main.async {
                             completion(result)
                         }
@@ -430,11 +395,15 @@ final class VoiceStickCoordinator {
         }
     }
 
+    func cancelFirmwareUpdate() {
+        ble.cancelFirmwareUpdate()
+    }
+
     private func handleStateEvent(_ event: StateEvent, peripheralID: UUID) {
         switch event.event {
         case "device_info":
             if let hardware = event.hardware, let firmwareVersion = event.firmwareVersion {
-                NSLog("Connected VoiceStick hardware=\(hardware) firmware=\(firmwareVersion)")
+                NSLog("Connected XC hardware=\(hardware) firmware=\(firmwareVersion)")
             }
             updateDeviceFirmwareInfo(event: event, peripheralID: peripheralID)
         case "button_down":
@@ -449,7 +418,7 @@ final class VoiceStickCoordinator {
     }
 
     private func handleButtonDown(_ event: StateEvent, peripheralID: UUID) {
-        NSLog("Button down button=\(event.button ?? "nil") dev=VS-\(deviceID(for: peripheralID) ?? "unknown") session=\(event.sessionID.map(String.init) ?? "nil")")
+        NSLog("Button down button=\(event.button ?? "nil") dev=XC-\(deviceID(for: peripheralID) ?? "unknown") session=\(event.sessionID.map(String.init) ?? "nil")")
         switch event.button {
         case "primary":
             handlePrimaryButtonDown(sessionID: event.sessionID, peripheralID: peripheralID)
@@ -461,7 +430,7 @@ final class VoiceStickCoordinator {
     }
 
     private func handleButtonUp(_ event: StateEvent, peripheralID: UUID) {
-        NSLog("Button up button=\(event.button ?? "nil") dev=VS-\(deviceID(for: peripheralID) ?? "unknown") session=\(event.sessionID.map(String.init) ?? "nil") duration_ms=\(event.durationMs.map(String.init) ?? "nil")")
+        NSLog("Button up button=\(event.button ?? "nil") dev=XC-\(deviceID(for: peripheralID) ?? "unknown") session=\(event.sessionID.map(String.init) ?? "nil") duration_ms=\(event.durationMs.map(String.init) ?? "nil")")
         switch event.button {
         case "primary":
             handlePrimaryButtonUp(peripheralID: peripheralID)
@@ -473,7 +442,7 @@ final class VoiceStickCoordinator {
     }
 
     private func handleButtonClick(_ event: StateEvent, peripheralID: UUID) {
-        NSLog("Button click button=\(event.button ?? "nil") dev=VS-\(deviceID(for: peripheralID) ?? "unknown") session=\(event.sessionID.map(String.init) ?? "nil") duration_ms=\(event.durationMs.map(String.init) ?? "nil")")
+        NSLog("Button click button=\(event.button ?? "nil") dev=XC-\(deviceID(for: peripheralID) ?? "unknown") session=\(event.sessionID.map(String.init) ?? "nil") duration_ms=\(event.durationMs.map(String.init) ?? "nil")")
         switch event.button {
         case "primary":
             if handleFrontButtonDuringPendingPaste(peripheralID: peripheralID) {
@@ -655,19 +624,19 @@ final class VoiceStickCoordinator {
 
     private func handleSubtitlePrimaryButtonDown(sessionID: UInt32?, peripheralID: UUID) {
         guard let sessionID, sessionID != 0 else {
-            NSLog("Ignoring subtitle button_down with missing/zero session dev=VS-\(deviceID(for: peripheralID) ?? "unknown"); sending ready")
+            NSLog("Ignoring subtitle button_down with missing/zero session dev=XC-\(deviceID(for: peripheralID) ?? "unknown"); sending ready")
             ble.sendUIState("ready", to: peripheralID)
             return
         }
         let deviceID = deviceID(for: peripheralID)
-        NSLog("Subtitle button_down dev=VS-\(deviceID ?? "unknown") session=\(sessionID) active=\(activeSubtitleSessions[peripheralID].map(String.init) ?? "nil") existing=\(subtitleCycle(peripheralID: peripheralID, sessionID: sessionID) != nil)")
+        NSLog("Subtitle button_down dev=XC-\(deviceID ?? "unknown") session=\(sessionID) active=\(activeSubtitleSessions[peripheralID].map(String.init) ?? "nil") existing=\(subtitleCycle(peripheralID: peripheralID, sessionID: sessionID) != nil)")
         if activeSubtitleSessions[peripheralID] == sessionID ||
             subtitleCycle(peripheralID: peripheralID, sessionID: sessionID) != nil {
-            NSLog("Subtitle button_down ignored dev=VS-\(deviceID ?? "unknown") session=\(sessionID)")
+            NSLog("Subtitle button_down ignored dev=XC-\(deviceID ?? "unknown") session=\(sessionID)")
             return
         }
         if let previousSessionID = activeSubtitleSessions[peripheralID] {
-            NSLog("Subtitle button_down preempt active dev=VS-\(deviceID ?? "unknown") previous=\(previousSessionID) next=\(sessionID)")
+            NSLog("Subtitle button_down preempt active dev=XC-\(deviceID ?? "unknown") previous=\(previousSessionID) next=\(sessionID)")
             clearActiveSubtitleSession(peripheralID: peripheralID, sessionID: previousSessionID)
         }
         let cycle = SubtitleCycle(
@@ -680,18 +649,18 @@ final class VoiceStickCoordinator {
         subtitleCycles[SubtitleCycleKey(peripheralID: peripheralID, sessionID: sessionID)] = cycle
         activeSubtitleSessions[peripheralID] = sessionID
         cycle.debugAudioRecorder.start(deviceID: deviceID, sessionID: sessionID)
-        NSLog("Subtitle cycle start dev=VS-\(deviceID ?? "unknown") session=\(sessionID)")
+        NSLog("Subtitle cycle start dev=XC-\(deviceID ?? "unknown") session=\(sessionID)")
         statusController.showListening(deviceID: deviceID)
         ble.sendUIState("recording", to: peripheralID)
     }
 
     private func handleSubtitlePrimaryButtonUp(peripheralID: UUID) {
         guard let cycle = activeSubtitleCycle(peripheralID: peripheralID) else {
-            NSLog("Subtitle button_up ignored no active cycle dev=VS-\(deviceID(for: peripheralID) ?? "unknown")")
+            NSLog("Subtitle button_up ignored no active cycle dev=XC-\(deviceID(for: peripheralID) ?? "unknown")")
             return
         }
         let sessionID = cycle.sessionID
-        NSLog("Subtitle button_up dev=VS-\(cycle.deviceID ?? "unknown") session=\(sessionID) frames=\(cycle.receivedAudioFrames) duration=\(String(format: "%.3f", cycle.duration))")
+        NSLog("Subtitle button_up dev=XC-\(cycle.deviceID ?? "unknown") session=\(sessionID) frames=\(cycle.receivedAudioFrames) duration=\(String(format: "%.3f", cycle.duration))")
         if cycle.duration < minimumRecordingDuration {
             cancelSubtitleCycle(peripheralID: peripheralID, reason: "short_recording")
         } else if cycle.receivedAudioFrames == 0 {
@@ -749,7 +718,7 @@ final class VoiceStickCoordinator {
     private func beginWaitingForSubtitleAudioEnd(_ cycle: SubtitleCycle, reason: String) {
         guard !cycle.waitingForAudioEnd else { return }
         cycle.waitingForAudioEnd = true
-        NSLog("Waiting for subtitle audio END frame VS-\(cycle.deviceID ?? "unknown") reason=\(reason)")
+        NSLog("Waiting for subtitle audio END frame XC-\(cycle.deviceID ?? "unknown") reason=\(reason)")
         if config.interactionMode != .holdToTalk {
             statusController.setStatus("Processing")
             ble.sendUIState("thinking", to: cycle.peripheralID)
@@ -766,7 +735,7 @@ final class VoiceStickCoordinator {
                   let cycle = self.subtitleCycle(peripheralID: peripheralID, sessionID: sessionID),
                   cycle.waitingForAudioEnd
             else { return }
-            NSLog("Subtitle audio END timeout VS-\(cycle.deviceID ?? "unknown"); finalizing buffered audio")
+            NSLog("Subtitle audio END timeout XC-\(cycle.deviceID ?? "unknown"); finalizing buffered audio")
             self.sendSubtitleFinalOggChunkIfNeeded(peripheralID: peripheralID, sessionID: sessionID)
         }
     }
@@ -782,7 +751,7 @@ final class VoiceStickCoordinator {
               !cycle.sentFinalAudioChunk
         else { return }
         cycle.sentFinalAudioChunk = true
-        NSLog("Subtitle audio final dev=VS-\(cycle.deviceID ?? "unknown") session=\(sessionID) frames=\(cycle.receivedAudioFrames) asr_started=\(cycle.asrStarted)")
+        NSLog("Subtitle audio final dev=XC-\(cycle.deviceID ?? "unknown") session=\(sessionID) frames=\(cycle.receivedAudioFrames) asr_started=\(cycle.asrStarted)")
         cancelSubtitleAudioEndTimeout(cycle)
         if !cycle.asrStarted && cycle.duration < minimumRecordingDuration {
             cancelSubtitleCycle(peripheralID: peripheralID, reason: "short_recording")
@@ -796,7 +765,7 @@ final class VoiceStickCoordinator {
 
     private func finishSubtitleAudioInput(_ cycle: SubtitleCycle) {
         if config.interactionMode == .holdToTalk {
-            NSLog("Subtitle audio input finished dev=VS-\(cycle.deviceID ?? "unknown") session=\(cycle.sessionID) -> device ready")
+            NSLog("Subtitle audio input finished dev=XC-\(cycle.deviceID ?? "unknown") session=\(cycle.sessionID) -> device ready")
             clearActiveSubtitleSession(peripheralID: cycle.peripheralID, sessionID: cycle.sessionID)
             ble.sendUIState("ready", to: cycle.peripheralID)
         } else {
@@ -1008,7 +977,7 @@ final class VoiceStickCoordinator {
               !cycle.finishedFinalText
         else { return }
         cycle.finishedFinalText = true
-        NSLog("Subtitle final text dev=VS-\(cycle.deviceID ?? "unknown") session=\(sessionID) text_len=\(text.count)")
+        NSLog("Subtitle final text dev=XC-\(cycle.deviceID ?? "unknown") session=\(sessionID) text_len=\(text.count)")
         let profile = outputProfile(for: cycle.deviceID)
         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showSubtitleText(text, profile: profile, deviceID: cycle.deviceID) { [weak self] didShowSubtitle in
@@ -1034,7 +1003,7 @@ final class VoiceStickCoordinator {
 
     private func finishSubtitleCycleWithError(peripheralID: UUID, sessionID: UInt32, message: String) {
         guard let cycle = subtitleCycle(peripheralID: peripheralID, sessionID: sessionID) else { return }
-        NSLog("ASR error VS-\(cycle.deviceID ?? "unknown"): \(message)")
+        NSLog("ASR error XC-\(cycle.deviceID ?? "unknown"): \(message)")
         cycle.asr.cancel()
         cycle.debugAudioRecorder.discard()
         cancelSubtitleAudioEndTimeout(cycle)
@@ -1049,7 +1018,7 @@ final class VoiceStickCoordinator {
 
     private func cancelSubtitleCycle(peripheralID: UUID, reason: String) {
         guard let cycle = activeSubtitleCycle(peripheralID: peripheralID) else { return }
-        NSLog("Cancel subtitle cycle VS-\(cycle.deviceID ?? "unknown") reason=\(reason)")
+        NSLog("Cancel subtitle cycle XC-\(cycle.deviceID ?? "unknown") reason=\(reason)")
         cycle.asr.cancel()
         cycle.debugAudioRecorder.discard()
         cancelSubtitleAudioEndTimeout(cycle)
@@ -1063,7 +1032,7 @@ final class VoiceStickCoordinator {
 
     private func finishSubtitleCycle(peripheralID: UUID, sessionID: UInt32, hideOverlay: Bool) {
         guard let cycle = subtitleCycle(peripheralID: peripheralID, sessionID: sessionID) else { return }
-        NSLog("Subtitle cycle finish dev=VS-\(cycle.deviceID ?? "unknown") session=\(sessionID) hide_overlay=\(hideOverlay) active=\(activeSubtitleSessions[peripheralID].map(String.init) ?? "nil")")
+        NSLog("Subtitle cycle finish dev=XC-\(cycle.deviceID ?? "unknown") session=\(sessionID) hide_overlay=\(hideOverlay) active=\(activeSubtitleSessions[peripheralID].map(String.init) ?? "nil")")
         if hideOverlay {
             statusController.hideOverlay(deviceID: cycle.deviceID)
         }
@@ -1143,7 +1112,7 @@ final class VoiceStickCoordinator {
             guard let self else { return }
             switch result {
             case .success(let outputText):
-                NSLog("Subtitle show text dev=VS-\(deviceID) text_len=\(outputText.count)")
+                NSLog("Subtitle show text dev=XC-\(deviceID) text_len=\(outputText.count)")
                 self.subtitleController.show(
                     text: outputText,
                     deviceID: deviceID,
@@ -1195,24 +1164,6 @@ final class VoiceStickCoordinator {
         statusController.showError(message, deviceID: activeDeviceID) { [weak self] in
             guard let self, self.errorRecoveryToken == token else { return }
             self.recoverFromASRError(hideOverlay: false)
-        }
-    }
-
-    private func presentASRUpgradeAlert(url: URL, message: String) {
-        statusController.hideOverlay { [weak self] in
-            guard let self else { return }
-            self.recoverFromASRError(hideOverlay: false)
-            NSApp.activate(ignoringOtherApps: true)
-
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "VoiceStick Cloud needs attention"
-            alert.informativeText = message
-            alert.addButton(withTitle: "Open")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(url)
-            }
         }
     }
 
@@ -1394,130 +1345,72 @@ final class VoiceStickCoordinator {
         if let firmwareVersion = event.firmwareVersion {
             info.currentVersion = firmwareVersion
         }
-        info.errorMessage = nil
         firmwareInfoByDeviceID[deviceID] = info
         refreshFirmwareAvailability()
     }
 
-    private func startFirmwareManifestRefreshTimer() {
-        firmwareManifestRefreshTimer?.invalidate()
-        firmwareManifestRefreshTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
-            self?.checkFirmwareUpdatesIfNeeded(force: false, showErrors: false)
+    private func startFirmwareReleaseRefreshTimer() {
+        firmwareReleaseRefreshTimer?.invalidate()
+        firmwareReleaseRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: firmwareReleaseCacheDuration,
+            repeats: true
+        ) { [weak self] _ in
+            self?.checkFirmwareUpdatesIfNeeded(force: false)
         }
     }
 
-    private func checkFirmwareUpdatesIfNeeded(force: Bool, showErrors: Bool) {
-        if firmwareManifestCheckInFlight {
-            return
-        }
+    private func checkFirmwareUpdatesIfNeeded(force: Bool) {
+        guard !firmwareReleaseCheckInFlight else { return }
         if !force,
-           let lastFirmwareManifestCheckAt,
-           Date().timeIntervalSince(lastFirmwareManifestCheckAt) < firmwareManifestCacheDuration {
+           let lastFirmwareReleaseCheckAt,
+           Date().timeIntervalSince(lastFirmwareReleaseCheckAt) < firmwareReleaseCacheDuration {
             refreshFirmwareAvailability()
             return
         }
 
-        firmwareManifestCheckInFlight = true
+        firmwareReleaseCheckInFlight = true
         setFirmwareChecking(true)
-        firmwareManifestClient.fetchManifest { [weak self] result in
+        firmwareReleaseClient.fetchLatest { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.firmwareManifestCheckInFlight = false
+                self.firmwareReleaseCheckInFlight = false
                 self.setFirmwareChecking(false)
                 switch result {
-                case .success(let manifest):
-                    NSLog("Firmware manifest version=\(manifest.version) hardware=\(manifest.hardware)")
-                    self.lastFirmwareManifestCheckAt = Date()
-                    self.latestFirmwareManifest = manifest
-                    self.clearFirmwareErrors()
-                    self.refreshFirmwareAvailability()
+                case .success(let release):
+                    NSLog("GitHub firmware release version=\(release.version)")
+                    self.lastFirmwareReleaseCheckAt = Date()
+                    self.latestFirmwareRelease = release
                 case .failure(let error):
-                    NSLog("Firmware manifest check failed: \(error.localizedDescription)")
-                    if showErrors {
-                        self.setFirmwareError(error.localizedDescription)
-                    } else {
-                        self.refreshFirmwareAvailability()
-                    }
+                    NSLog("GitHub firmware release check failed: \(error.localizedDescription)")
                 }
+                self.refreshFirmwareAvailability()
             }
         }
     }
 
     private func refreshFirmwareAvailability() {
-        for (deviceID, var info) in firmwareInfoByDeviceID {
+        for deviceID in pairedDeviceIDs {
+            var info = firmwareInfoByDeviceID[deviceID] ?? DeviceFirmwareInfo()
             info.latestVersion = nil
             info.updateAvailable = false
-            guard let manifest = latestFirmwareManifest else {
-                firmwareInfoByDeviceID[deviceID] = info
-                continue
+            if let release = latestFirmwareRelease,
+               info.hardware == FirmwareRelease.supportedHardware,
+               let currentVersion = info.currentVersion {
+                info.latestVersion = release.version
+                info.updateAvailable = FirmwareVersion.isVersion(
+                    currentVersion,
+                    olderThan: release.version
+                )
             }
-            guard let hardware = info.hardware else {
-                firmwareInfoByDeviceID[deviceID] = info
-                continue
-            }
-            guard let currentVersion = info.currentVersion else {
-                firmwareInfoByDeviceID[deviceID] = info
-                continue
-            }
-            guard hardware == manifest.hardware else {
-                NSLog("Firmware availability VS-\(deviceID) hardware=\(hardware) current=\(currentVersion) latest=\(manifest.version) update=false reason=hardware_mismatch manifest_hardware=\(manifest.hardware)")
-                firmwareInfoByDeviceID[deviceID] = info
-                continue
-            }
-            info.latestVersion = manifest.version
-            info.updateAvailable = FirmwareVersion.isVersion(currentVersion, olderThan: manifest.version)
             firmwareInfoByDeviceID[deviceID] = info
-            NSLog("Firmware availability VS-\(deviceID) hardware=\(hardware) current=\(currentVersion) latest=\(manifest.version) update=\(info.updateAvailable)")
-            maybeShowFirmwareUpdatePromptAfterPairing(deviceID: deviceID, info: info)
         }
         statusController.setFirmwareInfo(firmwareInfoByDeviceID)
-    }
-
-    private func maybeShowFirmwareUpdatePromptAfterPairing(deviceID: String, info: DeviceFirmwareInfo) {
-        guard
-            pendingFirmwareUpdatePromptDeviceIDs.contains(deviceID),
-            let currentVersion = info.currentVersion,
-            let latestVersion = info.latestVersion
-        else {
-            return
-        }
-        guard info.updateAvailable else {
-            pendingFirmwareUpdatePromptDeviceIDs.remove(deviceID)
-            return
-        }
-        pendingFirmwareUpdatePromptDeviceIDs.remove(deviceID)
-        let isBelowMinimum = FirmwareVersion.isVersion(
-            currentVersion,
-            olderThan: AppConfig.minimumCompatibleFirmwareVersion
-        )
-        DispatchQueue.main.async { [onFirmwareUpdatePrompt] in
-            onFirmwareUpdatePrompt?(deviceID, currentVersion, latestVersion, isBelowMinimum)
-        }
     }
 
     private func setFirmwareChecking(_ isChecking: Bool) {
         for deviceID in pairedDeviceIDs {
             var info = firmwareInfoByDeviceID[deviceID] ?? DeviceFirmwareInfo()
             info.isChecking = isChecking
-            if isChecking {
-                info.errorMessage = nil
-            }
-            firmwareInfoByDeviceID[deviceID] = info
-        }
-        statusController.setFirmwareInfo(firmwareInfoByDeviceID)
-    }
-
-    private func clearFirmwareErrors() {
-        for (deviceID, var info) in firmwareInfoByDeviceID {
-            info.errorMessage = nil
-            firmwareInfoByDeviceID[deviceID] = info
-        }
-    }
-
-    private func setFirmwareError(_ message: String) {
-        for deviceID in pairedDeviceIDs {
-            var info = firmwareInfoByDeviceID[deviceID] ?? DeviceFirmwareInfo()
-            info.errorMessage = message
             firmwareInfoByDeviceID[deviceID] = info
         }
         statusController.setFirmwareInfo(firmwareInfoByDeviceID)

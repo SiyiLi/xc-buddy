@@ -1,10 +1,7 @@
 import AppKit
 
 final class SettingsWindowController: NSWindowController {
-    private let providerPopup = NSPopUpButton()
     private let apiKeyField = NSTextField()
-    private let applyTrialAPIKeyButton = NSButton(title: "Apply Trial", target: nil, action: nil)
-    private let resourcePopup = NSPopUpButton()
     private let openAIBaseURLField = NSTextField()
     private let openAIModelField = NSTextField()
     private let openAILanguageField = NSTextField()
@@ -19,9 +16,6 @@ final class SettingsWindowController: NSWindowController {
     private let statusLabel = NSTextField(labelWithString: "")
     private let codexBridgePortField = NSTextField()
     private let codexBridgeTokenField = NSSecureTextField()
-    private var currentDisplayedProvider: ASRProvider = .volcengine
-    private var resourceRow: NSStackView?
-    private var openAIRows: [NSStackView] = []
     var onConfigChanged: ((AppConfig) -> Void)?
 
     private var config: AppConfig
@@ -39,27 +33,17 @@ final class SettingsWindowController: NSWindowController {
         super.init(window: window)
         buildContent()
         loadConfigIntoFields()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(apiKeyFieldDidChange),
-            name: NSControl.textDidChangeNotification,
-            object: apiKeyField
-        )
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
     func show() {
         config = AppConfig.load()
         loadConfigIntoFields()
         showWindow(nil)
-        window?.makeFirstResponder(providerPopup)
+        window?.makeFirstResponder(apiKeyField)
         window?.center()
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -74,22 +58,12 @@ final class SettingsWindowController: NSWindowController {
         stack.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(stack)
 
-        stack.addArrangedSubview(sectionTitle("ASR"))
-        configureProviderPopup()
-        stack.addArrangedSubview(row(label: "Provider", control: providerPopup))
-        configureApplyTrialAPIKeyButton()
-        stack.addArrangedSubview(row(label: "API Key", control: apiKeyControl()))
-        configureResourcePopup()
-        let resourceRow = row(label: "Resource ID", control: resourcePopup)
-        self.resourceRow = resourceRow
-        stack.addArrangedSubview(resourceRow)
-        openAIRows = [
-            row(label: "Base URL", control: openAIBaseURLField),
-            row(label: "Model", control: openAIModelField),
-            row(label: "Language", control: openAILanguageField),
-            row(label: "Prompt", control: openAIPromptField)
-        ]
-        openAIRows.forEach(stack.addArrangedSubview)
+        stack.addArrangedSubview(sectionTitle("NVIDIA Transcription"))
+        stack.addArrangedSubview(row(label: "API Key", control: apiKeyField))
+        stack.addArrangedSubview(row(label: "Base URL", control: openAIBaseURLField))
+        stack.addArrangedSubview(row(label: "Model", control: openAIModelField))
+        stack.addArrangedSubview(row(label: "Language", control: openAILanguageField))
+        stack.addArrangedSubview(row(label: "Prompt", control: openAIPromptField))
         configureHotwordsTextView()
         stack.addArrangedSubview(row(label: "Hotwords", control: hotwordsScrollView))
         stack.addArrangedSubview(hintRow("Separate hotwords with commas or new lines."))
@@ -143,37 +117,6 @@ final class SettingsWindowController: NSWindowController {
         ])
     }
 
-    private func configureResourcePopup() {
-        resourcePopup.addItems(withTitles: AppConfig.supportedResourceIDs)
-    }
-
-    private func configureProviderPopup() {
-        providerPopup.addItems(withTitles: [
-            ASRProvider.voiceStickCloud.displayName,
-            ASRProvider.volcengine.displayName,
-            ASRProvider.openAICompatible.displayName
-        ])
-        providerPopup.target = self
-        providerPopup.action = #selector(providerSelectionChanged)
-    }
-
-    private func configureApplyTrialAPIKeyButton() {
-        applyTrialAPIKeyButton.target = self
-        applyTrialAPIKeyButton.action = #selector(applyTrialAPIKey)
-    }
-
-    private func apiKeyControl() -> NSStackView {
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        apiKeyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 190).isActive = true
-        applyTrialAPIKeyButton.widthAnchor.constraint(equalToConstant: 102).isActive = true
-        stack.addArrangedSubview(apiKeyField)
-        stack.addArrangedSubview(applyTrialAPIKeyButton)
-        return stack
-    }
-
     private func configureHotwordsTextView() {
         hotwordsScrollView.hasVerticalScroller = true
         hotwordsScrollView.borderType = .bezelBorder
@@ -203,9 +146,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func loadConfigIntoFields() {
-        currentDisplayedProvider = config.asrProvider
-        providerPopup.selectItem(withTitle: config.asrProvider.displayName)
-        apiKeyField.stringValue = apiKey(for: config.asrProvider)
+        apiKeyField.stringValue = config.openAIAPIKey
         openAIBaseURLField.stringValue = config.openAIBaseURL
         openAIModelField.stringValue = config.openAIModel
         openAILanguageField.stringValue = config.openAILanguage
@@ -219,64 +160,7 @@ final class SettingsWindowController: NSWindowController {
         codexBridgePortField.integerValue = config.codexBridgePort
         codexBridgeTokenField.stringValue = config.codexBridgeToken
 
-        if resourcePopup.itemTitles.contains(config.resourceID) {
-            resourcePopup.selectItem(withTitle: config.resourceID)
-        }
-        updateProviderRows()
-        updateApplyTrialButton()
         statusLabel.stringValue = ""
-    }
-
-    @objc private func providerSelectionChanged() {
-        saveDisplayedAPIKey()
-        currentDisplayedProvider = selectedProvider()
-        config.asrProvider = currentDisplayedProvider
-        apiKeyField.stringValue = apiKey(for: currentDisplayedProvider)
-        updateProviderRows()
-        updateApplyTrialButton()
-    }
-
-    @objc private func apiKeyFieldDidChange() {
-        updateApplyTrialButton()
-    }
-
-    @objc private func applyTrialAPIKey() {
-        saveDisplayedAPIKey()
-        guard currentDisplayedProvider == .voiceStickCloud else { return }
-
-        applyTrialAPIKeyButton.isEnabled = false
-        statusLabel.stringValue = "Applying trial API key..."
-        VoiceStickCloudAPI.applyTrialAPIKey(
-            cloudURL: config.voiceStickCloudURL,
-            deviceID: config.pairedDeviceIDs.first
-        ) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.applyTrialAPIKeyButton.isEnabled = true
-                switch result {
-                case .success(.apiKey(let apiKey)):
-                    self.config.voiceStickAPIKey = apiKey
-                    self.apiKeyField.stringValue = apiKey
-                    self.statusLabel.stringValue = "Trial API key applied."
-                    self.updateApplyTrialButton()
-                case .success(.url(let url)):
-                    self.statusLabel.stringValue = "Opened trial application page."
-                    if !NSWorkspace.shared.open(url) {
-                        self.showErrorAlert(
-                            title: "Could Not Open Trial Page",
-                            message: url.absoluteString
-                        )
-                    }
-                case .failure(let error):
-                    self.statusLabel.stringValue = ""
-                    self.showErrorAlert(
-                        title: "Could Not Apply Trial API Key",
-                        message: error.localizedDescription
-                    )
-                    self.updateApplyTrialButton()
-                }
-            }
-        }
     }
 
     @objc private func chooseDebugDirectory() {
@@ -291,17 +175,9 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func saveSettings() {
-        saveDisplayedAPIKey()
-        let provider = selectedProvider()
-        let resourceID = resourcePopup.titleOfSelectedItem ?? config.resourceID
-
         config = AppConfig(
-            asrProvider: provider,
-            voiceStickAPIKey: config.voiceStickAPIKey,
-            voiceStickCloudURL: config.voiceStickCloudURL,
-            volcengineAPIKey: config.volcengineAPIKey,
             openAIBaseURL: openAIBaseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
-            openAIAPIKey: config.openAIAPIKey,
+            openAIAPIKey: apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             openAIModel: openAIModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             openAILanguage: openAILanguageField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             openAIPrompt: openAIPromptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -309,7 +185,6 @@ final class SettingsWindowController: NSWindowController {
             llmAPIKey: llmAPIKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             llmModel: llmModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             interactionMode: config.interactionMode,
-            resourceID: resourceID,
             asrHotwords: AppConfig.hotwordList(hotwordsTextView.string),
             pairedDeviceIDs: config.pairedDeviceIDs,
             deviceThemeColors: config.deviceThemeColors,
@@ -336,54 +211,6 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func openConfigFolder() {
         AppConfig.openConfigDirectory()
-    }
-
-    private func selectedProvider() -> ASRProvider {
-        switch providerPopup.titleOfSelectedItem {
-        case ASRProvider.voiceStickCloud.displayName:
-            return .voiceStickCloud
-        case ASRProvider.volcengine.displayName:
-            return .volcengine
-        case ASRProvider.openAICompatible.displayName:
-            return .openAICompatible
-        default:
-            return config.asrProvider
-        }
-    }
-
-    private func apiKey(for provider: ASRProvider) -> String {
-        switch provider {
-        case .voiceStickCloud:
-            return config.voiceStickAPIKey
-        case .volcengine:
-            return config.volcengineAPIKey
-        case .openAICompatible:
-            return config.openAIAPIKey
-        }
-    }
-
-    private func saveDisplayedAPIKey() {
-        let value = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch currentDisplayedProvider {
-        case .voiceStickCloud:
-            config.voiceStickAPIKey = value
-        case .volcengine:
-            config.volcengineAPIKey = value
-        case .openAICompatible:
-            config.openAIAPIKey = value
-        }
-    }
-
-    private func updateProviderRows() {
-        resourceRow?.isHidden = currentDisplayedProvider != .volcengine
-        openAIRows.forEach { $0.isHidden = currentDisplayedProvider != .openAICompatible }
-        updateApplyTrialButton()
-    }
-
-    private func updateApplyTrialButton() {
-        let isCloud = currentDisplayedProvider == .voiceStickCloud
-        let isEmpty = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        applyTrialAPIKeyButton.isHidden = !(isCloud && isEmpty)
     }
 
     private func showErrorAlert(title: String, message: String) {

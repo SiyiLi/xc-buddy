@@ -102,7 +102,7 @@ final class StatusController {
     private var pairedDeviceIDs: [String]
     private var deviceThemeColors: [String: OverlayThemeColor]
     private var deviceOverlayPositions: [String: OverlayPosition]
-    private var connectedDevices: [ConnectedVoiceStickDevice] = []
+    private var connectedDevices: [ConnectedXCDevice] = []
     private var firmwareInfoByDeviceID: [String: DeviceFirmwareInfo] = [:]
     private var interactionMode: InteractionMode
     private var autoEnter: Bool
@@ -149,7 +149,7 @@ final class StatusController {
         rebuildMenu()
     }
 
-    func setConnectedDevices(_ devices: [ConnectedVoiceStickDevice]) {
+    func setConnectedDevices(_ devices: [ConnectedXCDevice]) {
         let sortedDevices = devices.sorted { $0.deviceID < $1.deviceID }
         guard connectedDevices.map(\.deviceID) != sortedDevices.map(\.deviceID) ||
                 connectedDevices.map(\.name) != sortedDevices.map(\.name) else { return }
@@ -363,7 +363,11 @@ final class StatusController {
             addDeviceTextItems(to: submenu, deviceID: deviceID)
             submenu.addItem(NSMenuItem.separator())
 
-            addFirmwareItems(to: submenu, deviceID: deviceID, isConnected: connectedDevice != nil)
+            addFirmwareItems(
+                to: submenu,
+                deviceID: deviceID,
+                isConnected: connectedDevice != nil
+            )
 
             let forgetItem = makeMenuItem(
                 title: "Forget This Device",
@@ -468,23 +472,10 @@ final class StatusController {
         submenu.addItem(currentItem)
 
         if info?.isChecking == true {
-            let checkingItem = NSMenuItem(title: "Checking for Updates", action: nil, keyEquivalent: "")
+            let checkingItem = NSMenuItem(title: "Checking for Updates...", action: nil, keyEquivalent: "")
             checkingItem.isEnabled = false
-            checkingItem.image = Self.symbolImage(named: "arrow.triangle.2.circlepath", accessibilityDescription: "Checking")
             submenu.addItem(checkingItem)
-            return
-        }
-
-        if let errorMessage = info?.errorMessage {
-            let errorItem = NSMenuItem(title: "Update Check Failed", action: nil, keyEquivalent: "")
-            errorItem.toolTip = errorMessage
-            errorItem.isEnabled = false
-            errorItem.image = Self.symbolImage(named: "exclamationmark.triangle", accessibilityDescription: "Update Check Failed")
-            submenu.addItem(errorItem)
-            return
-        }
-
-        if info?.updateAvailable == true, let latestVersion = info?.latestVersion {
+        } else if info?.updateAvailable == true, let latestVersion = info?.latestVersion {
             let updateItem = makeMenuItem(
                 title: "Update to \(latestVersion)...",
                 symbolName: "square.and.arrow.down",
@@ -496,7 +487,10 @@ final class StatusController {
         } else if info?.latestVersion != nil && info?.currentVersion != nil {
             let upToDateItem = NSMenuItem(title: "Firmware Up to Date", action: nil, keyEquivalent: "")
             upToDateItem.isEnabled = false
-            upToDateItem.image = Self.symbolImage(named: "checkmark.circle", accessibilityDescription: "Firmware Up to Date")
+            upToDateItem.image = Self.symbolImage(
+                named: "checkmark.circle",
+                accessibilityDescription: "Firmware Up to Date"
+            )
             submenu.addItem(upToDateItem)
         }
     }

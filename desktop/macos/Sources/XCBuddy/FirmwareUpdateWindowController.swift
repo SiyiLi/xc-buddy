@@ -41,26 +41,22 @@ final class FirmwareUpdateWindowController: NSWindowController {
             confirmedBytes = max(confirmedBytes, progress.writtenBytes)
         }
 
-        let displayedBytes = progress.isDeviceConfirmed ?
-            confirmedBytes :
-            max(confirmedBytes, min(progress.writtenBytes, confirmedBytes + 64 * 1024))
-        let displayedProgress = FirmwareUpdateProgress(
-            writtenBytes: displayedBytes,
-            totalBytes: progress.totalBytes,
-            isDeviceConfirmed: progress.isDeviceConfirmed
-        )
-        let clamped = min(max(displayedProgress.fraction, 0), 1)
-        let percent = Int(clamped * 100)
+        let displayedBytes = progress.isDeviceConfirmed
+            ? confirmedBytes
+            : max(confirmedBytes, min(progress.writtenBytes, confirmedBytes + 64 * 1024))
+        let clamped = min(max(
+            Double(displayedBytes) / Double(max(progress.totalBytes, 1)),
+            0
+        ), 1)
         progressIndicator.doubleValue = clamped * 100
-        percentLabel.stringValue = "\(percent)%"
+        percentLabel.stringValue = "\(Int(clamped * 100))%"
 
         let elapsed = max(0.1, Date().timeIntervalSince(startedAt))
-        let bytesPerSecond = Double(max(confirmedBytes, displayedBytes)) / elapsed
+        let bytesPerSecond = Double(displayedBytes) / elapsed
         speedLabel.stringValue = "Speed \(Self.format(bytesPerSecond: bytesPerSecond))"
 
         if bytesPerSecond > 1 && displayedBytes < progress.totalBytes {
-            let remainingBytes = progress.totalBytes - displayedBytes
-            let remaining = Double(max(0, remainingBytes)) / bytesPerSecond
+            let remaining = Double(progress.totalBytes - displayedBytes) / bytesPerSecond
             timeLabel.stringValue = "\(Self.format(duration: remaining)) remaining"
         } else if displayedBytes >= progress.totalBytes {
             timeLabel.stringValue = "Finishing on device"
@@ -104,7 +100,6 @@ final class FirmwareUpdateWindowController: NSWindowController {
         progressIndicator.minValue = 0
         progressIndicator.maxValue = 100
         progressIndicator.doubleValue = 0
-        progressIndicator.controlSize = .regular
 
         let progressRow = NSStackView()
         progressRow.orientation = .horizontal
@@ -171,10 +166,7 @@ final class FirmwareUpdateWindowController: NSWindowController {
 
     private static func format(duration: TimeInterval) -> String {
         let seconds = max(0, Int(duration.rounded()))
-        if seconds < 60 {
-            return "\(seconds)s"
-        }
-        return "\(seconds / 60)m \(seconds % 60)s"
+        return seconds < 60 ? "\(seconds)s" : "\(seconds / 60)m \(seconds % 60)s"
     }
 
     private static func format(bytesPerSecond: Double) -> String {

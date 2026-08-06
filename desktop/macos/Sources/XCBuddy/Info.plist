@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>VoiceStickApp</string>
+	<string>XCBuddy</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -31,6 +31,8 @@
 	<string>XC Buddy uses Bluetooth to connect to the XC microphone.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
+	<key>SUFeedURL</key>
+	<string></string>
 	<key>SUPublicEDKey</key>
 	<string></string>
 </dict>

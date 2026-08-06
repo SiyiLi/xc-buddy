@@ -21,7 +21,7 @@ def existing_windows_item(path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Write the Sparkle appcast for a VoiceStick release.")
+    parser = argparse.ArgumentParser(description="Write the Sparkle appcast for an XC Buddy release.")
     parser.add_argument("--version", required=True)
     parser.add_argument("--zip-url", required=True)
     parser.add_argument("--signature", required=True)
@@ -29,7 +29,7 @@ def main() -> None:
     parser.add_argument("--msi-url")
     parser.add_argument("--msi-length", type=int)
     parser.add_argument("--output", default="website/public/appcast.xml")
-    parser.add_argument("--release-notes", default="VoiceStick macOS release.")
+    parser.add_argument("--release-notes", default="XC Buddy macOS release.")
     args = parser.parse_args()
 
     if args.length <= 0:
@@ -41,7 +41,7 @@ def main() -> None:
 
     notes = "".join(f"<li>{html.escape(line)}</li>" for line in args.release_notes.splitlines() if line.strip())
     if not notes:
-        notes = "<li>VoiceStick macOS release.</li>"
+        notes = "<li>XC Buddy macOS release.</li>"
 
     pub_date = email.utils.format_datetime(datetime.now(timezone.utc))
     output_path = Path(args.output)
@@ -72,9 +72,9 @@ def main() -> None:
     content = f"""<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>VoiceStick</title>
-    <link>https://78.github.io/voicestick/appcast.xml</link>
-    <description>VoiceStick app updates</description>
+    <title>XC Buddy</title>
+    <link>https://github.com/SiyiLi/xc-buddy/</link>
+    <description>XC Buddy app updates</description>
     <language>zh-CN</language>
 {windows_item}    <item>
       <title>Version {html.escape(args.version)}</title>

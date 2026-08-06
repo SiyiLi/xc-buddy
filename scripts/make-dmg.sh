@@ -1,10 +1,10 @@
 #!/bin/bash
-# Package VoiceStick.app into a signed and optionally notarized DMG.
+# Package XC Buddy.app into a signed and optionally notarized DMG.
 #
 # Usage:
 #   scripts/make-dmg.sh
-#   scripts/make-dmg.sh build/VoiceStick-<version>.app
-#   scripts/make-dmg.sh build/VoiceStick-<version>.app build/VoiceStick-<version>.dmg
+#   scripts/make-dmg.sh build/XC-Buddy-<version>.app
+#   scripts/make-dmg.sh build/XC-Buddy-<version>.app build/XC-Buddy-<version>.dmg
 
 set -euo pipefail
 
@@ -12,10 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$SCRIPT_DIR/.."
 BUILD_DIR="$ROOT_DIR/build"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
-APP_PATH="${1:-$BUILD_DIR/VoiceStick-${VERSION}.app}"
-OUTPUT="${2:-$BUILD_DIR/VoiceStick-${VERSION}.dmg}"
+APP_PATH="${1:-$BUILD_DIR/XC-Buddy-${VERSION}.app}"
+OUTPUT="${2:-$BUILD_DIR/XC-Buddy-${VERSION}.dmg}"
 STAGING_DIR="$BUILD_DIR/.dmg-staging"
-VOLUME_NAME="VoiceStick"
+VOLUME_NAME="XC Buddy"
 
 if [ ! -d "$APP_PATH" ]; then
     echo "Error: Application bundle not found: $APP_PATH"
@@ -42,7 +42,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 rm -rf "$STAGING_DIR" "$OUTPUT"
 mkdir -p "$STAGING_DIR"
-ditto --norsrc --noextattr "$APP_PATH" "$STAGING_DIR/VoiceStick.app"
+ditto --norsrc --noextattr "$APP_PATH" "$STAGING_DIR/XC Buddy.app"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 echo "Creating DMG..."

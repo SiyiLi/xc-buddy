@@ -1,5 +1,35 @@
 import Foundation
 
+enum ASRResultType: String {
+    case full
+    case single
+}
+
+struct ASRSessionOptions {
+    var hotwords: [String] = []
+    var resultType: ASRResultType = .full
+    var showUtterances: Bool = false
+}
+
+struct ASRSegment {
+    let text: String
+    let definite: Bool
+    let startTime: Int?
+    let endTime: Int?
+}
+
+protocol ASRClient: AnyObject {
+    var onPartial: ((String) -> Void)? { get set }
+    var onSegment: ((ASRSegment) -> Void)? { get set }
+    var onFinal: ((String) -> Void)? { get set }
+    var onError: ((String) -> Void)? { get set }
+
+    func start(options: ASRSessionOptions) -> Bool
+    func sendOggOpusChunk(_ data: Data, isLast: Bool)
+    func finish()
+    func cancel()
+}
+
 final class OpenAITranscriptionClient: ASRClient {
     private struct ChatResponse: Decodable {
         struct Choice: Decodable {
@@ -22,7 +52,6 @@ final class OpenAITranscriptionClient: ASRClient {
     var onSegment: ((ASRSegment) -> Void)?
     var onFinal: ((String) -> Void)?
     var onError: ((String) -> Void)?
-    var onUpgradeURL: ((URL, String) -> Void)?
 
     init(config: AppConfig) { self.config = config }
 
@@ -176,10 +205,5 @@ final class OpenAITranscriptionClient: ASRClient {
 }
 
 func makeASRClient(config: AppConfig) -> any ASRClient {
-    switch config.asrProvider {
-    case .openAICompatible:
-        return OpenAITranscriptionClient(config: config)
-    case .voiceStickCloud, .volcengine:
-        return ASRWebSocketClient(config: config)
-    }
+    OpenAITranscriptionClient(config: config)
 }
