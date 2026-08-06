@@ -33,6 +33,7 @@ static const char *TAG = "voice_ble";
 static bool s_connected;
 static bool s_audio_subscribed;
 static bool s_state_subscribed;
+static bool s_control_seen;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint8_t s_own_addr_type;
 static uint16_t s_audio_attr_handle;
@@ -87,7 +88,10 @@ static const ble_uuid128_t s_ota_state_uuid =
 static void start_advertising(void);
 static void stop_advertising(void);
 static struct ble_npl_callout s_adv_retry_callout;
+static struct ble_npl_callout s_ready_timeout_callout;
 #define ADV_RETRY_DELAY_MS 1000
+#define CONTROL_HANDSHAKE_TIMEOUT_MS 5000
+#define HEARTBEAT_TIMEOUT_MS 90000
 
 static void adv_retry_callout_cb(struct ble_npl_event *ev)
 {
@@ -95,6 +99,19 @@ static void adv_retry_callout_cb(struct ble_npl_event *ev)
     if (!s_connected && !ble_gap_adv_active()) {
         ESP_LOGI(TAG, "retrying advertising after earlier failure");
         start_advertising();
+    }
+}
+
+static void ready_timeout_callout_cb(struct ble_npl_event *ev)
+{
+    (void)ev;
+    if (s_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ESP_LOGW(TAG, "disconnecting BLE link after XC Buddy %s timeout",
+                 s_control_seen ? "heartbeat" : "control handshake");
+        int rc = ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        if (rc != 0 && rc != BLE_HS_ENOTCONN) {
+            ESP_LOGW(TAG, "terminate unready link failed rc=%d", rc);
+        }
     }
 }
 
@@ -382,7 +399,6 @@ static int ota_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 static int control_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    (void)conn_handle;
     (void)attr_handle;
     (void)arg;
 
@@ -397,6 +413,18 @@ static int control_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     if (rc != 0) {
         return BLE_ATT_ERR_UNLIKELY;
     }
+
+    const bool was_ready = voice_ble_is_ready();
+    s_connected = true;
+    s_conn_handle = conn_handle;
+    s_control_seen = true;
+    ble_npl_callout_reset(&s_ready_timeout_callout,
+                          pdMS_TO_TICKS(HEARTBEAT_TIMEOUT_MS));
+    const bool is_ready = voice_ble_is_ready();
+    if (is_ready != was_ready && s_connection_cb) {
+        s_connection_cb(is_ready);
+    }
+    ESP_LOGI(TAG, "XC Buddy control handshake received ready=%d", is_ready);
 
     ESP_LOGD(TAG, "control %s", buffer);
     if (s_control_cb) {
@@ -464,6 +492,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
             s_connected = true;
             s_audio_subscribed = false;
             s_state_subscribed = false;
+            s_control_seen = false;
             s_conn_handle = event->connect.conn_handle;
             ESP_LOGI(TAG, "connected handle=%u", s_conn_handle);
             stop_advertising();
@@ -480,9 +509,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                     ESP_LOGW(TAG, "mtu exchange request failed rc=%d", mtu_rc);
                 }
             }
-            if (s_connection_cb) {
-                s_connection_cb(true);
-            }
+            ble_npl_callout_reset(&s_ready_timeout_callout,
+                                  pdMS_TO_TICKS(CONTROL_HANDSHAKE_TIMEOUT_MS));
         } else {
             ESP_LOGW(TAG, "connect failed status=%d", event->connect.status);
             start_advertising();
@@ -494,6 +522,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected reason=%d", event->disconnect.reason);
+        ble_npl_callout_stop(&s_ready_timeout_callout);
         if (s_ota.active) {
             (void)esp_ota_abort(s_ota.handle);
             ota_clear_state();
@@ -505,6 +534,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         s_connected = false;
         s_audio_subscribed = false;
         s_state_subscribed = false;
+        s_control_seen = false;
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_itvl_target = CONN_ITVL_NONE;
         s_itvl_update_pending = false;
@@ -514,7 +544,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         }
         return 0;
 
-    case BLE_GAP_EVENT_SUBSCRIBE:
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        const bool was_ready = voice_ble_is_ready();
         // SUBSCRIBE always implies an active connection on this conn_handle.
         // Defensively re-sync our cached state in case a stale DISCONNECT
         // for an older connection arrived out of order and cleared things,
@@ -536,7 +567,15 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                 }
             }
         }
+        ESP_LOGI(TAG, "subscribe attr=%u notify=%d audio=%d state=%d",
+                 event->subscribe.attr_handle, event->subscribe.cur_notify,
+                 s_audio_subscribed, s_state_subscribed);
+        const bool is_ready = voice_ble_is_ready();
+        if (is_ready != was_ready && s_connection_cb) {
+            s_connection_cb(is_ready);
+        }
         return 0;
+    }
 
     case BLE_GAP_EVENT_CONN_UPDATE: {
         struct ble_gap_conn_desc desc;
@@ -706,6 +745,8 @@ esp_err_t voice_ble_init(void)
 
     ble_npl_callout_init(&s_adv_retry_callout, nimble_port_get_dflt_eventq(),
                          adv_retry_callout_cb, NULL);
+    ble_npl_callout_init(&s_ready_timeout_callout, nimble_port_get_dflt_eventq(),
+                         ready_timeout_callout_cb, NULL);
 
     nimble_port_freertos_init(nimble_host_task);
     ESP_LOGI(TAG, "BLE initialized as %s", s_device_name);
@@ -744,12 +785,26 @@ bool voice_ble_is_connected(void)
 
 bool voice_ble_is_ready(void)
 {
-    return s_connected && s_audio_subscribed && s_state_subscribed;
+    return s_connected && s_audio_subscribed && s_state_subscribed && s_control_seen;
 }
 
 bool voice_ble_ota_is_active(void)
 {
     return s_ota.active;
+}
+
+esp_err_t voice_ble_disconnect(void)
+{
+    if (!s_connected || s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int rc = ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (rc != 0 && rc != BLE_HS_ENOTCONN) {
+        ESP_LOGW(TAG, "terminate requested link failed rc=%d", rc);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 esp_err_t voice_ble_send_audio(uint32_t session_id, uint32_t seq, uint8_t flags,

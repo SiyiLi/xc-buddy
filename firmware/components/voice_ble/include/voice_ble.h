@@ -40,6 +40,7 @@ const char *voice_ble_device_name(void);
 bool voice_ble_is_connected(void);
 bool voice_ble_is_ready(void);
 bool voice_ble_ota_is_active(void);
+esp_err_t voice_ble_disconnect(void);
 esp_err_t voice_ble_send_audio(uint32_t session_id, uint32_t seq, uint8_t flags,
                                const uint8_t *opus_payload, size_t len);
 esp_err_t voice_ble_request_fast_interval(void);
