@@ -1,18 +1,15 @@
 {
   "nav": {
     "flash": "烧录",
-    "download": "下载",
     "github": "GitHub"
   },
   "hero": {
     "eyebrow": "BLE 随身语音输入器",
-    "title": "VoiceStick",
-    "lead": "基于 M5Stack StickS3 的小巧语音棒。通过 BLE 低功耗蓝牙连接 macOS 或 Windows，接入豆包语音大模型，并把实时反馈的文本输入到当前光标位置。",
-    "downloadMac": "下载 macOS",
-    "downloadWindows": "下载 Windows",
+    "title": "XC Buddy",
+    "lead": "基于 M5Stack StickS3 的随身语音伙伴。通过 BLE 连接 macOS，使用 NVIDIA Inference 转写语音，并把 Codex 状态反馈到设备。",
     "flash": "在线烧录固件",
     "source": "查看源码",
-    "imageAlt": "VoiceStick 基于 M5Stack StickS3 的随身语音输入器"
+    "imageAlt": "XC Buddy 基于 M5Stack StickS3 的随身语音伙伴"
   },
   "features": {
     "label": "功能",
@@ -21,8 +18,8 @@
       "body": "通过 BLE 连接你手上的 StickS3 设备，低功耗、无线、随拿随用，适合长期放在桌面或随身携带。"
     },
     "model": {
-      "title": "豆包语音大模型",
-      "body": "接入豆包语音大模型做语音识别，对中文口语、长句和日常表达更友好，把想法快速变成可编辑文本。"
+      "title": "NVIDIA Inference 语音转写",
+      "body": "XC Buddy 把语音传送到 macOS 伴侣应用，由 NVIDIA Inference 转成可编辑文本并写入当前光标位置。"
     },
     "feedback": {
       "title": "实时反馈输入",
@@ -32,7 +29,7 @@
   "story": {
     "eyebrow": "小巧玲珑，随身携带",
     "title": "拿起来就能说，放下继续写",
-    "body": "VoiceStick 把 M5Stack StickS3 变成一个独立的语音输入按钮。它可以挂在桌边、放进口袋，或者随笔记本一起带走；需要输入时按住说话，识别结果就回到当前光标位置。"
+    "body": "XC Buddy 把 M5Stack StickS3 变成一个独立的语音输入按钮。它可以放在桌边或随笔记本一起带走；需要输入时按住说话，识别结果就回到当前光标位置。"
   },
   "flasher": {
     "eyebrow": "浏览器直连 StickS3",
@@ -46,7 +43,7 @@
     "button": {
       "start": "开始烧录",
       "flashing": "烧录中",
-      "download": "下载固件"
+      "release": "查看发布"
     },
     "status": {
       "idle": "准备就绪",
@@ -62,7 +59,7 @@
       "target": "ESP32-S3 / StickS3"
     },
     "firmware": {
-      "latest": "将从最新 GitHub Release 获取 VoiceStick StickS3 固件。",
+      "latest": "将从最新 GitHub Release 获取 XC Buddy StickS3 固件。",
       "ready": "固件已加载：{size}"
     },
     "unsupported": "当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge 打开此页面。",
@@ -77,12 +74,13 @@
     },
     "error": {
       "downloadFailed": "固件下载失败，HTTP {status}",
+      "assetMissing": "最新 XC Buddy Release 中没有 StickS3 merged 固件。",
       "wrongChip": "检测到 {chip}，请连接 M5Stack StickS3。"
     }
   },
   "download": {
     "title": "需要其他文件？",
-    "body": "GitHub Release 里还有校验和、appcast 文件和固件镜像。",
+    "body": "最新 GitHub Release 包含 OTA、merged 固件镜像及其 SHA-256 校验和。",
     "cta": "查看全部发布文件"
   },
   "footer": {

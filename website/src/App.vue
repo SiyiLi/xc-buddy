@@ -4,17 +4,13 @@ import { useI18n } from 'vue-i18n'
 import { ESPLoader, Transport } from 'esptool-js'
 import { setLocale } from './i18n'
 import productPhoto from './assets/sticks3.png'
-import packageInfo from '../package.json'
 
 const { locale, t } = useI18n()
-const releaseUrl = 'https://github.com/78/voicestick/releases/latest'
-const githubUrl = 'https://github.com/78/voicestick'
-const releaseDownloadBase = `https://github.com/78/voicestick/releases/download/v${packageInfo.version}`
-const macDownloadUrl = `${releaseDownloadBase}/VoiceStick-${packageInfo.version}.dmg`
-const windowsDownloadUrl = `${releaseDownloadBase}/VoiceStick_${packageInfo.version}.msi`
-const defaultFirmwareUrl = `https://xiaozhi-voice-assistant.oss-cn-shenzhen.aliyuncs.com/voicestick/firmwares/latest/voicestick-firmware-sticks3-merged-${packageInfo.version}.bin`
-const firmwareManifestUrl = import.meta.env.VITE_FIRMWARE_MANIFEST_URL || 'https://xiaozhi-voice-assistant.oss-cn-shenzhen.aliyuncs.com/voicestick/firmwares/latest/manifest.json'
-const firmwareUrl = ref(import.meta.env.VITE_FIRMWARE_URL || defaultFirmwareUrl)
+const githubUrl = 'https://github.com/SiyiLi/xc-buddy'
+const releaseUrl = `${githubUrl}/releases/latest`
+const latestReleaseApiUrl = 'https://api.github.com/repos/SiyiLi/xc-buddy/releases/latest'
+const mergedFirmwareAssetName = 'xc-buddy-sticks3-merged.bin'
+const firmwareUrl = ref(import.meta.env.VITE_FIRMWARE_URL || '')
 const appResetSequence = 'D0|R1|W100|R0|W500|D0'
 
 const languageLabel = computed(() => (locale.value === 'zh-CN' ? t('language.en') : t('language.zh')))
@@ -87,19 +83,24 @@ async function fetchFirmware() {
 }
 
 async function resolveFirmwareUrl() {
-  if (!firmwareManifestUrl) {
+  if (firmwareUrl.value) {
     return
   }
 
-  const response = await fetch(firmwareManifestUrl, { cache: 'no-store' })
+  const response = await fetch(latestReleaseApiUrl, { cache: 'no-store' })
   if (!response.ok) {
-    return
+    throw new Error(t('flasher.error.downloadFailed', { status: response.status }))
   }
 
-  const manifest = await response.json()
-  if (manifest?.merged_url) {
-    firmwareUrl.value = manifest.merged_url
+  const release = await response.json()
+  const firmwareAsset = release.assets?.find(
+    (asset) => asset.name === mergedFirmwareAssetName,
+  )
+  if (!firmwareAsset?.browser_download_url) {
+    throw new Error(t('flasher.error.assetMissing'))
   }
+
+  firmwareUrl.value = firmwareAsset.browser_download_url
 }
 
 async function flashFirmware() {
@@ -178,9 +179,9 @@ async function flashFirmware() {
 <template>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="./" aria-label="VoiceStick">
+      <a class="brand" href="./" aria-label="XC Buddy">
         <span class="brand-mark" aria-hidden="true"></span>
-        <span>VoiceStick</span>
+        <span>XC Buddy</span>
       </a>
       <nav>
         <a href="#flash">{{ t('nav.flash') }}</a>
@@ -199,8 +200,8 @@ async function flashFirmware() {
         <h1>{{ t('hero.title') }}</h1>
         <p class="lead">{{ t('hero.lead') }}</p>
         <div class="actions">
-          <a class="button primary mac" :href="macDownloadUrl">{{ t('hero.downloadMac') }}</a>
-          <a class="button primary windows" :href="windowsDownloadUrl">{{ t('hero.downloadWindows') }}</a>
+          <a class="button primary" href="#flash">{{ t('hero.flash') }}</a>
+          <a class="button secondary" :href="githubUrl">{{ t('hero.source') }}</a>
         </div>
       </div>
       <div class="product-visual" :aria-label="t('hero.imageAlt')">
@@ -263,7 +264,7 @@ async function flashFirmware() {
             <button class="button primary" type="button" :disabled="!canFlash" @click="flashFirmware">
               {{ flashing ? t('flasher.button.flashing') : t('flasher.button.start') }}
             </button>
-            <a class="button secondary" :href="firmwareUrl">{{ t('flasher.button.download') }}</a>
+            <a class="button secondary" :href="releaseUrl">{{ t('flasher.button.release') }}</a>
           </div>
 
           <p v-if="!serialSupported" class="browser-warning">{{ t('flasher.unsupported') }}</p>
@@ -292,7 +293,7 @@ async function flashFirmware() {
 
   <footer>
     <div class="section-inner footer-inner">
-      <span>VoiceStick</span>
+      <span>XC Buddy</span>
       <a href="./appcast.xml">{{ t('footer.appcast') }}</a>
     </div>
   </footer>

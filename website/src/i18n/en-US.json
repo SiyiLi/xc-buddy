@@ -1,18 +1,15 @@
 {
   "nav": {
     "flash": "Flash",
-    "download": "Download",
     "github": "GitHub"
   },
   "hero": {
     "eyebrow": "Portable BLE voice input",
-    "title": "VoiceStick",
-    "lead": "A compact voice stick based on M5Stack StickS3. It connects to macOS or Windows over BLE, uses the Doubao speech foundation model for recognition, and turns real-time feedback into text at your cursor.",
-    "downloadMac": "Download macOS",
-    "downloadWindows": "Download Windows",
+    "title": "XC Buddy",
+    "lead": "A portable voice companion based on M5Stack StickS3. It connects to macOS over BLE, transcribes speech with NVIDIA Inference, and reports Codex status back to the device.",
     "flash": "Flash firmware online",
     "source": "View source",
-    "imageAlt": "VoiceStick portable voice input device based on M5Stack StickS3"
+    "imageAlt": "XC Buddy portable voice companion based on M5Stack StickS3"
   },
   "features": {
     "label": "Features",
@@ -21,8 +18,8 @@
       "body": "Pair the StickS3 in your hand over Bluetooth Low Energy. It is wireless, efficient, and ready to stay on your desk or travel with your laptop."
     },
     "model": {
-      "title": "Doubao speech foundation model",
-      "body": "VoiceStick uses the Doubao speech foundation model for recognition, making spoken Chinese, longer sentences, and everyday phrasing feel fast to turn into editable text."
+      "title": "NVIDIA Inference transcription",
+      "body": "XC Buddy streams speech to the macOS companion app, which uses NVIDIA Inference to turn it into editable text at the current cursor."
     },
     "feedback": {
       "title": "Live text feedback",
@@ -32,7 +29,7 @@
   "story": {
     "eyebrow": "Small, portable, always nearby",
     "title": "Pick it up to speak. Put it down to keep writing.",
-    "body": "VoiceStick turns M5Stack StickS3 into a dedicated voice input button. Keep it near your keyboard, slip it into a pocket, or carry it with your laptop. Hold to talk, and the recognized text comes back to your cursor."
+    "body": "XC Buddy turns M5Stack StickS3 into a dedicated voice input button. Keep it near your keyboard or carry it with your laptop. Hold to talk, and the recognized text comes back to your cursor."
   },
   "flasher": {
     "eyebrow": "Direct browser connection",
@@ -46,7 +43,7 @@
     "button": {
       "start": "Start flashing",
       "flashing": "Flashing",
-      "download": "Download firmware"
+      "release": "View release"
     },
     "status": {
       "idle": "Ready",
@@ -62,7 +59,7 @@
       "target": "ESP32-S3 / StickS3"
     },
     "firmware": {
-      "latest": "VoiceStick StickS3 firmware will be fetched from the latest GitHub Release.",
+      "latest": "XC Buddy StickS3 firmware will be fetched from the latest GitHub Release.",
       "ready": "Firmware loaded: {size}"
     },
     "unsupported": "This browser does not support Web Serial. Open this page in desktop Chrome or Edge.",
@@ -77,12 +74,13 @@
     },
     "error": {
       "downloadFailed": "Firmware download failed, HTTP {status}",
+      "assetMissing": "The latest XC Buddy Release has no StickS3 merged firmware.",
       "wrongChip": "Detected {chip}. Please connect an M5Stack StickS3."
     }
   },
   "download": {
     "title": "Need another file?",
-    "body": "GitHub Releases also include checksums, appcast assets, and firmware images.",
+    "body": "The latest GitHub Release includes OTA and merged firmware images with SHA-256 checksums.",
     "cta": "View all release assets"
   },
   "footer": {

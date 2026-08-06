@@ -152,16 +152,6 @@ h1 {
   border-color: var(--accent);
 }
 
-.button.mac {
-  background: var(--ink);
-  border-color: var(--ink);
-}
-
-.button.windows {
-  background: #0078d4;
-  border-color: #0078d4;
-}
-
 .button.secondary {
   color: var(--ink);
   background: var(--panel);

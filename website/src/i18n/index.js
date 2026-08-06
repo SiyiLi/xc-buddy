@@ -5,7 +5,7 @@ import enUS from './en-US.json'
 const supportedLocales = ['zh-CN', 'en-US']
 
 function getDefaultLocale() {
-  const saved = localStorage.getItem('voicestick-locale')
+  const saved = localStorage.getItem('xc-buddy-locale')
   if (supportedLocales.includes(saved)) return saved
 
   const languages = navigator.languages?.length ? navigator.languages : [navigator.language]
@@ -16,7 +16,7 @@ function getDefaultLocale() {
 export function setLocale(locale) {
   if (!supportedLocales.includes(locale)) return
   i18n.global.locale.value = locale
-  localStorage.setItem('voicestick-locale', locale)
+  localStorage.setItem('xc-buddy-locale', locale)
   document.documentElement.lang = locale
 }
 

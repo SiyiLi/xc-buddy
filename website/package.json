@@ -1,7 +1,7 @@
 {
-  "name": "voicestick-website",
+  "name": "xc-buddy-website",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
