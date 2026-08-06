@@ -40,7 +40,7 @@ static const char *TAG = "audio_pipeline";
 #define CHIME_GATE_WAIT_MS 1000
 #define CHIME_BUFFER_SAMPLES 160
 #define CHIME_FADE_SAMPLES 80
-#define CHIME_VOLUME 45
+#define CHIME_VOLUME 60
 #define CHIME_PEAK_AMPLITUDE 10000
 
 typedef struct {

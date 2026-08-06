@@ -13,6 +13,7 @@ HELPER_NAME = "xc-buddy-codex-notify.py"
 EVENTS = {
     "UserPromptSubmit": "Notifying XC Buddy that Codex is working",
     "PermissionRequest": "Notifying XC Buddy that approval is needed",
+    "PreToolUse": "Notifying XC Buddy that Codex resumed work",
     "Stop": "Notifying XC Buddy that Codex is done",
     "SessionEnd": "Returning XC Buddy to idle when Codex closes",
 }

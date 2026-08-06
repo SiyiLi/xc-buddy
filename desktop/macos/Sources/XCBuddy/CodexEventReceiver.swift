@@ -4,6 +4,7 @@ import Network
 enum CodexLifecycleEvent {
     case working
     case approvalNeeded
+    case toolCallStarted
     case done
     case error(String)
 }
@@ -116,7 +117,9 @@ final class CodexEventReceiver {
         let rawType = (object["type"] as? String) ?? (object["event"] as? String) ?? ""
         let type = rawType.lowercased()
         let event: CodexLifecycleEvent
-        if type.contains("approval") {
+        if type == "tool-call-start" {
+            event = .toolCallStarted
+        } else if type.contains("approval") {
             event = .approvalNeeded
         } else if type.contains("error") || type.contains("fail") {
             let message = (object["message"] as? String) ?? rawType

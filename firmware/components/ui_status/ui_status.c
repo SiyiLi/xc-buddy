@@ -511,7 +511,7 @@ void ui_status_set_approval_needed(void)
 void ui_status_set_codex_done(const char *version)
 {
     char hint[48];
-    snprintf(hint, sizeof(hint), "v%s - ready in 5s", version ? version : "unknown");
+    snprintf(hint, sizeof(hint), "v%s - ready in 10s", version ? version : "unknown");
     set_scene(UI_STATUS_ICON_IDLE, "Codex done", hint);
 }
 

@@ -2,6 +2,12 @@ import AppKit
 import Foundation
 
 final class XCBuddyCoordinator {
+    private enum CodexActivityState {
+        case idle
+        case working
+        case approvalNeeded
+    }
+
     private enum PendingPasteState {
         case idle
         case waitingToPaste(text: String)
@@ -132,8 +138,10 @@ final class XCBuddyCoordinator {
     private let firmwareReleaseClient = FirmwareReleaseClient()
     private var debugAudioRecorder: DebugAudioRecorder
     private var codexReceiver: CodexEventReceiver?
+    private var codexActivityState = CodexActivityState.idle
     private let minimumRecordingDuration: TimeInterval = 0.5
     private let audioEndTimeout: TimeInterval = 1.0
+    private let approvalTimeout: TimeInterval = 60.0
     private let firmwareReleaseCacheDuration: TimeInterval = 60 * 60
 
     private var mainInputState = MainInputState.ready
@@ -144,6 +152,7 @@ final class XCBuddyCoordinator {
     private var pastedFinalText = false
     private var waitingForAudioEnd = false
     private var audioEndTimeoutTimer: Timer?
+    private var approvalTimeoutTimer: Timer?
     private var pendingPasteState = PendingPasteState.idle
     private var lastRecoverableText: String?
     private var lastRecoverablePeripheralID: UUID?
@@ -204,6 +213,7 @@ final class XCBuddyCoordinator {
     }
 
     func stop() {
+        cancelApprovalTimeout()
         codexReceiver?.stop()
         codexReceiver = nil
         ble.stop()
@@ -216,6 +226,7 @@ final class XCBuddyCoordinator {
 
     deinit {
         audioEndTimeoutTimer?.invalidate()
+        approvalTimeoutTimer?.invalidate()
         firmwareReleaseRefreshTimer?.invalidate()
         codexReceiver?.stop()
     }
@@ -269,6 +280,7 @@ final class XCBuddyCoordinator {
     }
 
     private func startCodexBridge() {
+        cancelApprovalTimeout()
         codexReceiver?.stop()
         statusController.setCodexBridgeStatus("Starting")
         let receiver = CodexEventReceiver(port: config.codexBridgePort, token: config.codexBridgeToken)
@@ -281,18 +293,33 @@ final class XCBuddyCoordinator {
             guard let self else { return }
             switch event {
             case .working:
+                self.cancelApprovalTimeout()
+                self.codexActivityState = .working
                 self.statusController.setStatus("Codex working")
                 self.statusController.setCodexBridgeStatus("Working")
                 self.ble.sendUIState("codex_working", text: "Codex is working")
             case .approvalNeeded:
+                self.startApprovalTimeout()
+                self.codexActivityState = .approvalNeeded
                 self.statusController.setStatus("Approval needed")
                 self.statusController.setCodexBridgeStatus("Approval needed")
                 self.ble.sendUIState("approval_needed", text: "Approval needed")
+            case .toolCallStarted:
+                self.cancelApprovalTimeout()
+                guard self.codexActivityState != .working else { return }
+                self.codexActivityState = .working
+                self.statusController.setStatus("Codex working")
+                self.statusController.setCodexBridgeStatus("Working")
+                self.ble.sendUIState("codex_working", text: "Codex is working")
             case .done:
+                self.cancelApprovalTimeout()
+                self.codexActivityState = .idle
                 self.statusController.setStatus("Ready")
                 self.statusController.setCodexBridgeStatus("Idle")
                 self.ble.sendUIState("codex_done", text: "Turn complete")
             case .error(let message):
+                self.cancelApprovalTimeout()
+                self.codexActivityState = .idle
                 self.statusController.setStatus("Codex error")
                 self.statusController.setCodexBridgeStatus("Error")
                 self.ble.sendUIState("error", text: message)
@@ -300,6 +327,22 @@ final class XCBuddyCoordinator {
         }
         codexReceiver = receiver
         receiver.start()
+    }
+
+    private func startApprovalTimeout() {
+        cancelApprovalTimeout()
+        approvalTimeoutTimer = Timer.scheduledTimer(withTimeInterval: approvalTimeout, repeats: false) {
+            [weak self] timer in
+            guard let self, self.approvalTimeoutTimer === timer,
+                  case .approvalNeeded = self.codexActivityState else { return }
+            self.approvalTimeoutTimer = nil
+            self.ble.playCodexNotificationChime()
+        }
+    }
+
+    private func cancelApprovalTimeout() {
+        approvalTimeoutTimer?.invalidate()
+        approvalTimeoutTimer = nil
     }
 
     private func configureASRCallbacks() {
@@ -471,7 +514,7 @@ final class XCBuddyCoordinator {
                 return
             }
             guard config.interactionMode == .clickToTalk else {
-                ble.sendUIState("ready", to: peripheralID)
+                sendReadyUIState(to: peripheralID)
                 return
             }
             if case .recording(_, let recordingPeripheralID, _) = mainInputState,
@@ -513,7 +556,7 @@ final class XCBuddyCoordinator {
         }
         if mainInputState.isBusy {
             if activePeripheralID != peripheralID {
-                ble.sendUIState("ready", to: peripheralID)
+                sendReadyUIState(to: peripheralID)
             } else if mainInputState.isFinalizing || isWaitingForFinalText {
                 ble.sendUIState("thinking", to: peripheralID)
             }
@@ -522,7 +565,7 @@ final class XCBuddyCoordinator {
         }
         guard let sessionID, sessionID != 0 else {
             NSLog("Ignoring primary button down with missing/zero session; sending ready")
-            ble.sendUIState("ready", to: peripheralID)
+            sendReadyUIState(to: peripheralID)
             return
         }
 
@@ -647,7 +690,7 @@ final class XCBuddyCoordinator {
     private func handleSubtitlePrimaryButtonDown(sessionID: UInt32?, peripheralID: UUID) {
         guard let sessionID, sessionID != 0 else {
             NSLog("Ignoring subtitle button_down with missing/zero session dev=XC-\(deviceID(for: peripheralID) ?? "unknown"); sending ready")
-            ble.sendUIState("ready", to: peripheralID)
+            sendReadyUIState(to: peripheralID)
             return
         }
         let deviceID = deviceID(for: peripheralID)
@@ -789,7 +832,7 @@ final class XCBuddyCoordinator {
         if config.interactionMode == .holdToTalk {
             NSLog("Subtitle audio input finished dev=XC-\(cycle.deviceID ?? "unknown") session=\(cycle.sessionID) -> device ready")
             clearActiveSubtitleSession(peripheralID: cycle.peripheralID, sessionID: cycle.sessionID)
-            ble.sendUIState("ready", to: cycle.peripheralID)
+            sendReadyUIState(to: cycle.peripheralID)
         } else {
             statusController.setStatus("Processing")
             ble.sendUIState("thinking", to: cycle.peripheralID)
@@ -1032,7 +1075,7 @@ final class XCBuddyCoordinator {
         clearActiveSubtitleSession(peripheralID: peripheralID, sessionID: sessionID)
         if !hasActiveSubtitleSession(peripheralID: peripheralID) {
             statusController.showError(message, deviceID: cycle.deviceID) { [weak self] in
-                self?.ble.sendUIState("ready", to: peripheralID)
+                self?.sendReadyUIState(to: peripheralID)
             }
         }
         subtitleCycles.removeValue(forKey: SubtitleCycleKey(peripheralID: peripheralID, sessionID: sessionID))
@@ -1045,7 +1088,7 @@ final class XCBuddyCoordinator {
         cycle.debugAudioRecorder.discard()
         cancelSubtitleAudioEndTimeout(cycle)
         statusController.hideOverlay(deviceID: cycle.deviceID)
-        ble.sendUIState("ready", to: peripheralID)
+        sendReadyUIState(to: peripheralID)
         clearActiveSubtitleSession(peripheralID: peripheralID, sessionID: cycle.sessionID)
         subtitleCycles.removeValue(
             forKey: SubtitleCycleKey(peripheralID: peripheralID, sessionID: cycle.sessionID)
@@ -1061,7 +1104,7 @@ final class XCBuddyCoordinator {
         clearActiveSubtitleSession(peripheralID: peripheralID, sessionID: sessionID)
         if !hasActiveSubtitleSession(peripheralID: peripheralID) {
             statusController.setStatus("Ready")
-            ble.sendUIState("ready", to: peripheralID)
+            sendReadyUIState(to: peripheralID)
         }
         subtitleCycles.removeValue(forKey: SubtitleCycleKey(peripheralID: peripheralID, sessionID: sessionID))
     }
@@ -1117,7 +1160,7 @@ final class XCBuddyCoordinator {
             subtitleCycles.removeValue(forKey: key)
         }
         statusController.hideOverlay(deviceID: deviceID(for: peripheralID))
-        ble.sendUIState("ready", to: peripheralID)
+        sendReadyUIState(to: peripheralID)
     }
 
     private func showSubtitleText(
@@ -1220,6 +1263,8 @@ final class XCBuddyCoordinator {
         finishRecognitionCycle()
         mainInputState = .ready
         if submittedToCodex {
+            cancelApprovalTimeout()
+            codexActivityState = .working
             statusController.setStatus("Codex working")
             statusController.setCodexBridgeStatus("Working")
             sendUIStateForActiveDevice("codex_working", text: "Codex is working")
@@ -1304,16 +1349,32 @@ final class XCBuddyCoordinator {
             return
         }
         if pendingPasteText == nil {
-            _ = restoreLastInputConfirmation(peripheralID: peripheralID)
+            guard !mainInputState.isBusy else { return }
+            if !restoreLastInputConfirmation(peripheralID: peripheralID) {
+                restoreCodexActivityState(to: peripheralID)
+            }
             return
         }
         guard activePeripheralID == peripheralID else { return }
         pendingPasteState = .idle
         finishRecognitionCycle()
         statusController.hideOverlay()
-        statusController.setStatus("Ready")
-        sendUIStateForActiveDevice("ready")
         mainInputState = .ready
+        restoreCodexActivityState(to: peripheralID)
+    }
+
+    private func restoreCodexActivityState(to peripheralID: UUID) {
+        switch codexActivityState {
+        case .idle:
+            statusController.setStatus("Ready")
+            sendReadyUIState(to: peripheralID)
+        case .working:
+            statusController.setStatus("Codex working")
+            ble.sendUIState("codex_working", text: "Codex is working", to: peripheralID)
+        case .approvalNeeded:
+            statusController.setStatus("Approval needed")
+            ble.sendUIState("approval_needed", text: "Approval needed", to: peripheralID)
+        }
     }
 
     private func cancelRecognitionInProgress() {
@@ -1336,6 +1397,7 @@ final class XCBuddyCoordinator {
             statusController.hideOverlay(deviceID: cycle.deviceID)
             clearActiveSubtitleSession(peripheralID: key.peripheralID, sessionID: key.sessionID)
             subtitleCycles.removeValue(forKey: key)
+            restoreCodexActivityState(to: key.peripheralID)
         }
         guard let activePeripheralID, !ble.isConnected(activePeripheralID) else { return }
         if waitingForAudioEnd {
@@ -1349,6 +1411,7 @@ final class XCBuddyCoordinator {
         finishRecognitionCycle()
         statusController.hideOverlay()
         subtitleController.hideAll()
+        restoreCodexActivityState(to: activePeripheralID)
     }
 
     private func finishRecognitionCycle() {
@@ -1452,7 +1515,30 @@ final class XCBuddyCoordinator {
     }
 
     private func sendUIStateForActiveDevice(_ state: String, text: String = "") {
-        ble.sendUIState(state, text: text, to: activePeripheralID)
+        if state == "ready" {
+            sendReadyUIState(to: activePeripheralID)
+        } else {
+            ble.sendUIState(state, text: text, to: activePeripheralID)
+        }
+    }
+
+    private func sendReadyUIState(to peripheralID: UUID?) {
+        ble.sendUIState(
+            "ready",
+            to: peripheralID,
+            backgroundState: codexBackgroundUIState
+        )
+    }
+
+    private var codexBackgroundUIState: String {
+        switch codexActivityState {
+        case .idle:
+            return "ready"
+        case .working:
+            return "codex_working"
+        case .approvalNeeded:
+            return "approval_needed"
+        }
     }
 
     private var activeDeviceID: String? {

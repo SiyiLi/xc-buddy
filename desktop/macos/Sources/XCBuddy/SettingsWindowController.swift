@@ -81,7 +81,7 @@ final class SettingsWindowController: NSWindowController {
 
         stack.addArrangedSubview(sectionTitle("Codex Bridge (Loopback Only)"))
         stack.addArrangedSubview(row(label: "Port", control: codexBridgePortField))
-        stack.addArrangedSubview(row(label: "Success Chime", control: codexSuccessChimeButton))
+        stack.addArrangedSubview(row(label: "Codex Chimes", control: codexSuccessChimeButton))
 
         stack.addArrangedSubview(sectionTitle("Stick Power"))
         stack.addArrangedSubview(timerRow(label: "Display", timers: [

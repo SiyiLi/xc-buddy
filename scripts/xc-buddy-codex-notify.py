@@ -19,6 +19,7 @@ def bridge_event(event: dict):
     mapped_type = {
         "userpromptsubmit": "agent-turn-start",
         "permissionrequest": "approval-requested",
+        "pretooluse": "tool-call-start",
         "stop": "agent-turn-complete",
         "sessionend": "agent-turn-complete",
     }.get(event_type)

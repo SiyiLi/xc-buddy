@@ -27,7 +27,7 @@
 static const char *TAG = "voice_stick";
 
 #define BATTERY_REFRESH_FALLBACK_MS (10 * 1000)
-#define CODEX_DONE_TIMEOUT_MS (5 * 1000)
+#define CODEX_DONE_TIMEOUT_MS (10 * 1000)
 #define DEFAULT_DISPLAY_DIM_SECONDS 30
 #define DEFAULT_DISPLAY_OFF_SECONDS (5 * 60)
 #define DEFAULT_IDLE_DEEP_SLEEP_SECONDS (5 * 60)
@@ -79,6 +79,7 @@ typedef enum {
 } app_ui_state_t;
 
 static app_ui_state_t s_app_ui_state = APP_UI_STATE_READY;
+static app_ui_state_t s_ready_background_state = APP_UI_STATE_READY;
 
 typedef enum {
     INTERACTION_MODE_HOLD_TO_TALK,
@@ -129,6 +130,7 @@ typedef enum {
     APP_EVENT_OTA_END,
     APP_EVENT_HOST_RESPONSE_TIMEOUT,
     APP_EVENT_CODEX_DONE_TIMEOUT,
+    APP_EVENT_CODEX_NOTIFICATION_CHIME,
 } app_event_type_t;
 
 typedef struct {
@@ -141,6 +143,7 @@ typedef struct {
     uint32_t codex_sleep_seconds;
     bool notify_completion;
     char state[32];
+    char background_state[32];
     char text[96];
 } app_event_t;
 
@@ -149,7 +152,8 @@ static void queue_app_event(app_event_type_t type);
 static void queue_app_event_with_ota(app_event_type_t type, uint32_t written, uint32_t size);
 static void queue_power_timers_event(uint32_t dim_seconds, uint32_t screen_off_seconds,
                                      uint32_t idle_sleep_seconds, uint32_t codex_sleep_seconds);
-static void queue_ui_state_event(const char *state, const char *text, bool notify_completion);
+static void queue_ui_state_event(const char *state, const char *background_state,
+                                 const char *text, bool notify_completion);
 static void apply_interaction_mode(interaction_mode_t mode);
 
 static bool is_external_powered(void)
@@ -263,7 +267,10 @@ static void restart_deep_sleep_timer(void)
 
     (void)esp_timer_stop(s_deep_sleep_timer);
     const bool codex_active = s_app_ui_state == APP_UI_STATE_CODEX_WORKING ||
-                              s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED;
+                              s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED ||
+                              (s_app_ui_state == APP_UI_STATE_READY &&
+                               (s_ready_background_state == APP_UI_STATE_CODEX_WORKING ||
+                                s_ready_background_state == APP_UI_STATE_APPROVAL_NEEDED));
     const uint64_t timeout_us = codex_active ? s_codex_deep_sleep_timeout_us
                                              : s_idle_deep_sleep_timeout_us;
     if (!s_recording && !s_ota_updating && !is_external_powered()) {
@@ -339,7 +346,10 @@ static void enter_deep_sleep(void)
     }
 
     const bool codex_active = s_app_ui_state == APP_UI_STATE_CODEX_WORKING ||
-                              s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED;
+                              s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED ||
+                              (s_app_ui_state == APP_UI_STATE_READY &&
+                               (s_ready_background_state == APP_UI_STATE_CODEX_WORKING ||
+                                s_ready_background_state == APP_UI_STATE_APPROVAL_NEEDED));
     const uint64_t timeout_us = codex_active ? s_codex_deep_sleep_timeout_us
                                              : s_idle_deep_sleep_timeout_us;
     const int64_t now_us = esp_timer_get_time();
@@ -537,7 +547,8 @@ static void queue_app_event_from_isr(app_event_type_t type, BaseType_t *high_tas
     }
 }
 
-static void queue_ui_state_event(const char *state, const char *text, bool notify_completion)
+static void queue_ui_state_event(const char *state, const char *background_state,
+                                 const char *text, bool notify_completion)
 {
     if (!s_app_event_queue) {
         ESP_LOGW(TAG, "drop ui_state state=%s text_len=%u: app queue unavailable",
@@ -552,6 +563,9 @@ static void queue_ui_state_event(const char *state, const char *text, bool notif
     };
     if (state) {
         strlcpy(event.state, state, sizeof(event.state));
+    }
+    if (background_state) {
+        strlcpy(event.background_state, background_state, sizeof(event.background_state));
     }
     if (text) {
         strlcpy(event.text, text, sizeof(event.text));
@@ -625,6 +639,7 @@ static void ble_control_cb(const char *json)
 
     const cJSON *event = cJSON_GetObjectItemCaseSensitive(root, "event");
     const cJSON *state = cJSON_GetObjectItemCaseSensitive(root, "state");
+    const cJSON *background_state = cJSON_GetObjectItemCaseSensitive(root, "background_state");
     const cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
     const cJSON *mode = cJSON_GetObjectItemCaseSensitive(root, "mode");
     const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(root, "enabled");
@@ -636,6 +651,7 @@ static void ble_control_cb(const char *json)
     if (cJSON_IsString(event) && strcmp(event->valuestring, "ui_state") == 0 &&
         cJSON_IsString(state)) {
         queue_ui_state_event(state->valuestring,
+                             cJSON_IsString(background_state) ? background_state->valuestring : "",
                              cJSON_IsString(text) ? text->valuestring : "",
                              cJSON_IsTrue(notify_completion));
     } else if (cJSON_IsString(event) && strcmp(event->valuestring, "interaction_mode") == 0 &&
@@ -653,6 +669,9 @@ static void ble_control_cb(const char *json)
         s_codex_success_chime_enabled = cJSON_IsTrue(enabled);
         ESP_LOGI(TAG, "Codex success chime %s",
                  s_codex_success_chime_enabled ? "enabled" : "disabled");
+    } else if (cJSON_IsString(event) &&
+               strcmp(event->valuestring, "codex_notification_chime") == 0) {
+        queue_app_event(APP_EVENT_CODEX_NOTIFICATION_CHIME);
     } else if (cJSON_IsString(event) && strcmp(event->valuestring, "power_timers") == 0) {
         uint32_t dim = 0;
         uint32_t screen_off = 0;
@@ -682,6 +701,17 @@ static uint32_t elapsed_button_ms(int64_t down_us)
         elapsed_us = 0;
     }
     return (uint32_t)(elapsed_us / 1000);
+}
+
+static app_ui_state_t ready_background_state_from_name(const char *state)
+{
+    if (state && strcmp(state, "codex_working") == 0) {
+        return APP_UI_STATE_CODEX_WORKING;
+    }
+    if (state && strcmp(state, "approval_needed") == 0) {
+        return APP_UI_STATE_APPROVAL_NEEDED;
+    }
+    return APP_UI_STATE_READY;
 }
 
 static void apply_app_ui_state(const char *state, const char *text, bool notify_completion)
@@ -716,20 +746,32 @@ static void apply_app_ui_state(const char *state, const char *text, bool notify_
         s_app_ui_state = APP_UI_STATE_PENDING_CONFIRMATION;
         ui_status_set_pending_confirmation();
         note_activity();
+        if (!s_recording) {
+            (void)voice_ble_request_slow_interval();
+        }
     } else if (strcmp(state, "codex_working") == 0) {
         s_app_ui_state = APP_UI_STATE_CODEX_WORKING;
+        s_ready_background_state = APP_UI_STATE_CODEX_WORKING;
         ui_status_set_codex_working();
         note_activity();
+        if (!s_recording) {
+            (void)voice_ble_request_slow_interval();
+        }
     } else if (strcmp(state, "approval_needed") == 0) {
         s_app_ui_state = APP_UI_STATE_APPROVAL_NEEDED;
+        s_ready_background_state = APP_UI_STATE_APPROVAL_NEEDED;
         ui_status_set_approval_needed();
         note_activity();
+        if (!s_recording) {
+            (void)voice_ble_request_slow_interval();
+        }
     } else if (strcmp(state, "codex_done") == 0) {
         const esp_app_desc_t *app_desc = esp_app_get_description();
         const bool completed_codex_work = notify_completion ||
                                           s_app_ui_state == APP_UI_STATE_CODEX_WORKING ||
                                           s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED;
         s_app_ui_state = APP_UI_STATE_CODEX_DONE;
+        s_ready_background_state = APP_UI_STATE_READY;
         note_activity();
         ui_status_set_codex_done(app_desc ? app_desc->version : NULL);
         if (completed_codex_work && s_codex_success_chime_enabled) {
@@ -739,10 +781,16 @@ static void apply_app_ui_state(const char *state, const char *text, bool notify_
             }
         }
         start_codex_done_timer();
+        if (!s_recording) {
+            (void)voice_ble_request_slow_interval();
+        }
     } else if (strcmp(state, "error") == 0) {
         s_app_ui_state = APP_UI_STATE_ERROR;
         ui_status_set_error(text && text[0] ? text : "Unknown error");
         note_activity();
+        if (!s_recording) {
+            (void)voice_ble_request_slow_interval();
+        }
     } else {
         ESP_LOGW(TAG, "unknown ui_state %s", state);
     }
@@ -851,20 +899,27 @@ static void app_event_task(void *arg)
         case APP_EVENT_SIDE_DOWN:
             ESP_LOGI(TAG, "button side down");
             note_activity();
+            (void)voice_ble_request_fast_interval();
             s_secondary_down_us = esp_timer_get_time();
             break;
         case APP_EVENT_SIDE_UP:
             ESP_LOGI(TAG, "button side up");
             note_activity();
             voice_ble_send_button_click("secondary", elapsed_button_ms(s_secondary_down_us), 0);
+            (void)voice_ble_request_slow_interval();
             s_secondary_down_us = 0;
             break;
         case APP_EVENT_UI_STATE:
+            if (strcmp(event.state, "ready") == 0) {
+                s_ready_background_state =
+                    ready_background_state_from_name(event.background_state);
+            }
             apply_app_ui_state(event.state, event.text, event.notify_completion);
             break;
         case APP_EVENT_BLE_CONNECTED:
             stop_codex_done_timer();
             s_app_ui_state = APP_UI_STATE_READY;
+            s_ready_background_state = APP_UI_STATE_READY;
             ui_status_set_idle();
             note_activity();
             break;
@@ -872,6 +927,7 @@ static void app_event_task(void *arg)
             s_recording = false;
             s_ota_updating = false;
             s_app_ui_state = APP_UI_STATE_READY;
+            s_ready_background_state = APP_UI_STATE_READY;
             stop_host_response_timer();
             stop_codex_done_timer();
             audio_pipeline_stop();
@@ -950,6 +1006,15 @@ static void app_event_task(void *arg)
                 apply_app_ui_state("ready", "", false);
             }
             break;
+        case APP_EVENT_CODEX_NOTIFICATION_CHIME:
+            if (s_codex_success_chime_enabled) {
+                esp_err_t err = audio_pipeline_play_success_chime();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "play Codex notification chime failed: %s",
+                             esp_err_to_name(err));
+                }
+            }
+            break;
         }
     }
 }
@@ -1016,8 +1081,20 @@ static void display_dim_timer_cb(void *arg)
         esp_err_t err = ui_status_set_brightness(DISPLAY_DIM_BRIGHTNESS);
         if (err == ESP_OK) {
             s_display_dimmed = true;
-            const bool resting = s_app_ui_state == APP_UI_STATE_READY &&
-                                 voice_ble_is_ready();
+            bool resting = false;
+            if (s_app_ui_state == APP_UI_STATE_READY && voice_ble_is_ready()) {
+                if (s_ready_background_state == APP_UI_STATE_CODEX_WORKING) {
+                    s_app_ui_state = APP_UI_STATE_CODEX_WORKING;
+                    ui_status_set_codex_working();
+                    restart_deep_sleep_timer();
+                } else if (s_ready_background_state == APP_UI_STATE_APPROVAL_NEEDED) {
+                    s_app_ui_state = APP_UI_STATE_APPROVAL_NEEDED;
+                    ui_status_set_approval_needed();
+                    restart_deep_sleep_timer();
+                } else {
+                    resting = true;
+                }
+            }
             ui_status_set_idle_dimmed(resting);
             ESP_LOGI(TAG, "display dimmed after inactivity");
         } else {
