@@ -50,14 +50,16 @@ final class LLMTranslationClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let systemPrompt = Self.systemPrompt(targetLanguage: targetLanguage, hotwords: hotwords)
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": config.llmModel,
-            "temperature": 0,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": text]
             ]
         ]
+        for (key, value) in Self.modelParameters(for: config.llmModel) {
+            payload[key] = value
+        }
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -111,5 +113,12 @@ final class LLMTranslationClient {
             prompt += terms.map { "- \($0)" }.joined(separator: "\n")
         }
         return prompt
+    }
+
+    private static func modelParameters(for model: String) -> [String: Any] {
+        if model.lowercased().contains("gpt-5.6") {
+            return ["reasoning_effort": "none"]
+        }
+        return ["temperature": 0]
     }
 }
