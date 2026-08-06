@@ -2,22 +2,58 @@
 
 XC Buddy listens only on `127.0.0.1` (default port `17321`). It never binds a wildcard or LAN interface. Configure the same bearer token in the XC Buddy settings/config and the helper environment.
 
-Add this to `~/.codex/config.toml` manually; XC Buddy does not edit Codex configuration:
+Install XC Buddy's Codex lifecycle hooks at user level so they run for Codex
+sessions in every folder:
 
-```toml
-notify = ["env", "XC_BUDDY_CODEX_TOKEN=replace-with-the-token-from-xc-buddy", "/usr/bin/python3", "/absolute/path/to/xc-buddy/scripts/xc-buddy-codex-notify.py"]
+```sh
+/usr/bin/python3 scripts/install-xc-buddy-codex-hooks.py
 ```
 
-Start a new Codex session after changing the file; Codex reads this setting at startup.
+The installer copies the lifecycle helper to `~/.codex/hooks/`, then merges XC
+Buddy's event handlers into `~/.codex/hooks.json` without replacing unrelated
+global hooks. Running it again updates the installed helper and XC Buddy
+handlers. The global hooks map:
+
+- `UserPromptSubmit` -> Working
+- `PermissionRequest` -> Approval needed
+- `Stop` -> Idle and `Codex done`
+- `SessionEnd` -> Idle and `Codex done` as a process-exit fallback
+
+Remove an older XC Buddy `notify = [...]` entry from `~/.codex/config.toml` and
+any repository-local XC Buddy `.codex/hooks.json`; Codex runs all matching hook
+sources, so leaving either one enabled causes duplicate completion events.
+
+Start a new Codex session in any folder, open `/hooks`, and review and trust the
+user-level XC Buddy hook definitions. Codex records trust against the exact hook
+hash, so repeat that review after changing `~/.codex/hooks.json`. Keep XC Buddy
+running while Codex works because the helper exits quietly when XC Buddy is not
+listening.
 
 Equivalent XC Buddy config:
 
 ```toml
 codex_bridge_port = 17321
 codex_bridge_token = "replace-with-the-token-from-xc-buddy"
+codex_success_chime = true
 ```
 
-Codex passes a JSON object as the helper's first argument. The helper forwards `agent-turn-complete` and event types containing `approval`, uses only Python's standard library, times out after 0.5 seconds, and exits successfully when XC Buddy is not running.
+Codex lifecycle hooks pass JSON on standard input. The helper reduces it to the
+session ID, turn ID, and lifecycle event before sending it to XC Buddy; prompt
+text and transcripts are not forwarded. The helper uses only Python's standard
+library, times out after 0.5 seconds, and exits successfully when XC Buddy is
+not running.
+
+The `UserPromptSubmit` hook aligns XC Buddy with Codex even when a prompt is
+typed manually. Auto-enter still marks the bridge as Working immediately, and
+the lifecycle hook confirms the same state. The `Stop` hook changes it back to
+Idle and sends `codex_done` to the connected stick. `SessionEnd` provides the
+same reset when a CLI process exits before a normal Stop event, so XC Buddy is
+not left showing Working after Codex has closed.
+
+The helper remains compatible with the legacy top-level `notify` command,
+which passes an `agent-turn-complete` JSON object as the helper's first
+argument. The lifecycle hooks are preferred because they expose both start and
+stop state.
 
 ## Receiver contract
 
@@ -27,19 +63,22 @@ Host: 127.0.0.1:17321
 Authorization: Bearer <token>
 Content-Type: application/json
 
-{"type":"agent-turn-complete"}
+{"type":"agent-turn-start"}
 ```
 
 Lifecycle mapping:
 
 | Event type | XC Buddy/device state |
 | --- | --- |
+| `agent-turn-start` | working |
 | contains `approval` | approval needed |
 | contains `error` or `fail` | error |
 | contains `complete` or `done` | ready / done |
 | any other accepted event | working |
 
-Firmware `0.1.1` displays `Codex done` and its version for five seconds after
-`agent-turn-complete`, then returns to the Ready screen.
+Firmware `0.1.1` and later displays `Codex done` and its version for five
+seconds after `agent-turn-complete`, then returns to the Ready screen. Firmware
+`0.1.2` and later also plays the optional success chime. The chime can be
+disabled in XC Buddy Settings under Codex Bridge.
 
 The listener requires the bearer token when `codex_bridge_token` is non-empty. Leaving it empty is supported for local development but is not recommended. The bridge does not scrape terminal output or send data outside the machine.

@@ -106,9 +106,14 @@ Current desktop events:
 {"event":"ui_state","state":"codex_working","text":"Codex is working"}
 {"event":"ui_state","state":"approval_needed","text":"Approval needed"}
 {"event":"ui_state","state":"codex_done","text":"Turn complete"}
+{"event":"ui_state","state":"codex_done","text":"Turn complete","notify_completion":true}
 {"event":"ui_state","state":"error","text":"ASR timeout"}
 {"event":"interaction_mode","mode":"hold_to_talk"}
 {"event":"interaction_mode","mode":"click_to_talk"}
+{"event":"codex_success_chime","enabled":true}
+{"event":"power_timers","dim_seconds":30,"screen_off_seconds":300,"idle_sleep_seconds":300,"codex_sleep_seconds":900}
+{"event":"heartbeat"}
+{"event":"disconnect"}
 ```
 
 The desktop helper always includes a `text` field, even for states without text
@@ -118,10 +123,28 @@ showing the recording cat when the primary button starts audio, but the app's
 render recognition text on-device because the LVGL font set does not include
 Chinese glyphs; `text` is used only to choose fixed English hints.
 
+`notify_completion` is sent only when XC Buddy replays a completion that
+occurred while a paired Stick was disconnected or in deep sleep. It allows the
+reconnected Stick to play the completion chime once even though its volatile UI
+state restarted at `ready`.
+
 `interaction_mode` controls the front-button behavior and idle screen hint.
 `hold_to_talk` starts audio on primary down and stops on primary up.
 `click_to_talk` starts audio on the first primary click and stops on the next
 primary click.
+
+`codex_success_chime` enables or disables the StickS3 completion sound. The
+desktop app sends the persisted XC Buddy setting whenever the device connects.
+
+`power_timers` updates all inactivity stages in seconds. XC Buddy validates and
+persists the values, then sends them whenever the device connects or settings
+change. The default timers are 30 seconds to dim, 5 minutes to turn the display
+off, 5 minutes to deep-sleep while idle, and 15 minutes to deep-sleep while
+Codex is Working or awaiting Approval.
+
+`heartbeat` renews the application-level connection lease without changing UI
+or power-management state. `disconnect` asks the peripheral to release the BLE
+link immediately during a normal app shutdown.
 
 In firmware `0.1.1` and later, `codex_done` displays the running firmware
 version for five seconds and then returns the device to `ready` automatically.
@@ -228,7 +251,17 @@ StickS3:
 boot -> advertising -> connected -> idle -> recording -> idle
 ```
 
-The firmware also dims the display after 30 seconds of idle time. On battery power it enters deep sleep after 5 minutes; while charging or USB powered it stays at the dimmed-screen stage. The front button wakes the device from deep sleep.
+The firmware dims any non-recording, non-OTA display after the configured dim
+delay while preserving the current scene. Only a connected `ready` scene
+changes its label to `Resting`; Working, Approval, error, and offline scenes
+remain identifiable at the lower brightness. It turns the LCD panel and
+backlight off after the configured screen-off delay. On battery power it enters
+deep sleep after the idle or Codex-specific delay; Codex Working and Approval
+therefore cannot keep the device awake indefinitely. Charging or USB power
+suppresses deep sleep but not the screen-off timer. Any new state or button
+activity turns the display back on. The front button wakes the device from deep
+sleep. XC Buddy retains the latest lifecycle state while the Stick sleeps; a
+missed completion is delivered once, with its chime, on the next reconnect.
 
 macOS:
 

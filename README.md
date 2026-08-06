@@ -14,7 +14,8 @@ Codex notify helper -> 127.0.0.1:17321 -------|-> device lifecycle display
 
 - `firmware/`: ESP-IDF firmware for StickS3. The UUIDs and audio/control framing remain VoiceStick-compatible.
 - `desktop/macos/`: native AppKit menu bar application for macOS 12+.
-- `scripts/xc-buddy-codex-notify.py`: quiet, standard-library Codex notify bridge.
+- `scripts/xc-buddy-codex-notify.py`: quiet, standard-library Codex lifecycle bridge.
+- `scripts/install-xc-buddy-codex-hooks.py`: idempotent user-level Codex hook installer.
 - `docs/codex-integration.md`: loopback bridge setup and event semantics.
 - `docs/internal-transcription.md`: OpenAI-compatible transcription contract.
 - `docs/protocol.md`: unchanged BLE protocol framing and UUIDs.
@@ -194,15 +195,14 @@ Hard resetting via RTS pin...
 ```
 
 The byte count changes when the firmware changes; `Hash of data verified` is
-the important integrity check. If a serial monitor accidentally leaves the
-board at `waiting for download`, return it to the flashed application with:
-
-```sh
-.venv/bin/python -m esptool \
-  --chip esp32s3 \
-  --port /dev/cu.usbmodem1101 \
-  run
-```
+the important integrity check. The StickS3 side control is a combined
+reset/power button: long press enters download mode, double-click powers off,
+and single click powers on or resets. If the internal green LED keeps blinking
+after a flash, release the button and single-click it to boot the application.
+On the tested USB Serial/JTAG connection, `esptool run` could report a hard
+reset while the device remained in download mode, so verify the screen rather
+than treating that command's exit status as proof of a normal boot. See the
+[official StickS3 button instructions](https://docs.m5stack.com/en/core/StickS3#button-operation-instructions).
 
 After boot, the target firmware advertises as `XC-717C` while preserving the
 VoiceStick-compatible GATT service and characteristic UUIDs.
@@ -316,7 +316,8 @@ StickS3, and program it.
 - Front button: hold/click to record according to configuration; confirm pending paste.
 - Side button: cancel or restore the most recent recoverable input.
 - Device display: offline/booting, ready, listening, thinking, confirmation, Codex working, approval needed, done, and error states.
-- Firmware `0.1.1` shows `Codex done` with its version for five seconds, then returns to Ready.
+- Firmware `0.1.1` and later shows `Codex done` with its version for five seconds, then returns to Ready.
+- XC Buddy normally disconnects explicitly when it quits. As a crash-only fallback, it renews the BLE connection lease with one small heartbeat every 30 seconds; firmware releases a stale macOS BLE link after 90 seconds. Heartbeats do not wake the display or postpone the five-minute deep-sleep timer.
 - Menu bar summary: device connection, ASR provider, output target, and Codex bridge status.
 
 See [Codex integration](docs/codex-integration.md) and [internal transcription](docs/internal-transcription.md) for exact local setup.
