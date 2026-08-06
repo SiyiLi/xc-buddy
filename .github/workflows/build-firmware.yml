@@ -4,8 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "firmware/**"
+      - "VERSION"
       - ".github/workflows/build-firmware.yml"
 
 permissions:
@@ -24,21 +26,63 @@ jobs:
           target: esp32s3
           path: firmware
           command: |
+            set -euo pipefail
             idf.py build
             mkdir -p ../dist
             cp build/xc_buddy.bin ../dist/xc-buddy-sticks3-ota.bin
             cd build
             esptool.py --chip esp32s3 merge_bin \
               -o ../../dist/xc-buddy-sticks3-merged.bin @flash_args
-
-      - name: Write checksums
-        run: |
-          cd dist
-          sha256sum xc-buddy-sticks3-ota.bin > xc-buddy-sticks3-ota.bin.sha256
-          sha256sum xc-buddy-sticks3-merged.bin > xc-buddy-sticks3-merged.bin.sha256
+            cd ../../dist
+            sha256sum xc-buddy-sticks3-ota.bin \
+              > xc-buddy-sticks3-ota.bin.sha256
+            sha256sum xc-buddy-sticks3-merged.bin \
+              > xc-buddy-sticks3-merged.bin.sha256
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: xc-buddy-sticks3-firmware
           path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_PUBLIC_FIRMWARE_RELEASES == 'true'
+    needs: firmware
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          firmware_version="$(tr -d '[:space:]' < firmware/version.txt)"
+          cmake_version="$(sed -nE 's/^project\(xc_buddy VERSION ([^)]+)\)$/\1/p' firmware/CMakeLists.txt)"
+          app_version="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\([^<]*\)<\/string>.*/\1/p;}' desktop/macos/Sources/XCBuddy/Info.plist)"
+          app_build="$(sed -n '/<key>CFBundleVersion<\/key>/{n;s/.*<string>\([^<]*\)<\/string>.*/\1/p;}' desktop/macos/Sources/XCBuddy/Info.plist)"
+          test "$GITHUB_REF_NAME" = "v$version"
+          test "$firmware_version" = "$version"
+          test "$cmake_version" = "$version"
+          test "$app_version" = "$version"
+          test "$app_build" = "$version"
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: xc-buddy-sticks3-firmware
+          path: dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/xc-buddy-sticks3-ota.bin \
+            dist/xc-buddy-sticks3-ota.bin.sha256 \
+            dist/xc-buddy-sticks3-merged.bin \
+            dist/xc-buddy-sticks3-merged.bin.sha256 \
+            --verify-tag \
+            --title "XC Buddy $GITHUB_REF_NAME" \
+            --generate-notes
