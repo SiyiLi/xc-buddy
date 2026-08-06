@@ -2,6 +2,13 @@ import AppKit
 import Foundation
 
 final class InputInjector {
+    var frontmostApplicationIsCodex: Bool {
+        guard let application = NSWorkspace.shared.frontmostApplication else { return false }
+        return [application.localizedName, application.bundleIdentifier]
+            .compactMap { $0?.lowercased() }
+            .contains { $0.contains("codex") }
+    }
+
     func paste(text: String, pressEnter: Bool) {
         guard !text.isEmpty else { return }
 

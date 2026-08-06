@@ -181,6 +181,8 @@ final class XCBuddyCoordinator {
             if !connectedDevices.isEmpty {
                 self.statusController.setStatus("Ready")
                 self.ble.sendInteractionMode(self.config.interactionMode)
+                self.ble.sendCodexSuccessChime(self.config.codexSuccessChime)
+                self.ble.sendPowerTimers(self.config.devicePowerTimers)
             } else {
                 self.statusController.setStatus(self.pairedDeviceIDs.isEmpty ? "Pair XC" : "Ready")
             }
@@ -199,6 +201,12 @@ final class XCBuddyCoordinator {
         ble.start()
         checkFirmwareUpdatesIfNeeded(force: false)
         startFirmwareReleaseRefreshTimer()
+    }
+
+    func stop() {
+        codexReceiver?.stop()
+        codexReceiver = nil
+        ble.stop()
     }
 
     func updateDeviceThemeColors(_ colors: [String: OverlayThemeColor]) {
@@ -239,6 +247,8 @@ final class XCBuddyCoordinator {
 
         self.config = config
         ble.sendInteractionMode(config.interactionMode)
+        ble.sendCodexSuccessChime(config.codexSuccessChime)
+        ble.sendPowerTimers(config.devicePowerTimers)
         debugAudioRecorder = DebugAudioRecorder(
             enabled: config.debugAudioCache,
             directory: config.debugAudioDirectory
@@ -263,21 +273,27 @@ final class XCBuddyCoordinator {
         statusController.setCodexBridgeStatus("Starting")
         let receiver = CodexEventReceiver(port: config.codexBridgePort, token: config.codexBridgeToken)
         receiver.onStatusChange = { [weak self] status in
-            self?.statusController.setCodexBridgeStatus(status)
+            self?.statusController.setCodexBridgeStatus(
+                status.hasPrefix("Listening") ? "Idle" : status
+            )
         }
         receiver.onEvent = { [weak self] event in
             guard let self else { return }
             switch event {
             case .working:
+                self.statusController.setStatus("Codex working")
                 self.statusController.setCodexBridgeStatus("Working")
                 self.ble.sendUIState("codex_working", text: "Codex is working")
             case .approvalNeeded:
+                self.statusController.setStatus("Approval needed")
                 self.statusController.setCodexBridgeStatus("Approval needed")
                 self.ble.sendUIState("approval_needed", text: "Approval needed")
             case .done:
-                self.statusController.setCodexBridgeStatus("Ready / done")
+                self.statusController.setStatus("Ready")
+                self.statusController.setCodexBridgeStatus("Idle")
                 self.ble.sendUIState("codex_done", text: "Turn complete")
             case .error(let message):
+                self.statusController.setStatus("Codex error")
                 self.statusController.setCodexBridgeStatus("Error")
                 self.ble.sendUIState("error", text: message)
             }
@@ -1199,9 +1215,11 @@ final class XCBuddyCoordinator {
 
     private func completePendingPaste(text: String) {
         let shouldPressEnter = config.autoEnter
+        let submittedToCodex = shouldPressEnter && inputInjector.frontmostApplicationIsCodex
         pendingPasteState = .idle
         finishRecognitionCycle()
-        if shouldPressEnter {
+        mainInputState = .ready
+        if submittedToCodex {
             statusController.setStatus("Codex working")
             statusController.setCodexBridgeStatus("Working")
             sendUIStateForActiveDevice("codex_working", text: "Codex is working")
@@ -1209,7 +1227,6 @@ final class XCBuddyCoordinator {
             statusController.setStatus("Ready")
             sendUIStateForActiveDevice("ready")
         }
-        mainInputState = .ready
         inputInjector.paste(text: text, pressEnter: shouldPressEnter)
     }
 

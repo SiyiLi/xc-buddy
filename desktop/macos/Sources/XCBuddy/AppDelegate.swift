@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController?
     private var dockIconWindowIDs = Set<ObjectIdentifier>()
     private var config = AppConfig.defaults
+    private var isPreparingToTerminate = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMainMenu()
@@ -20,6 +21,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             showOnboarding()
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard coordinator != nil else { return .terminateNow }
+        guard !isPreparingToTerminate else { return .terminateLater }
+
+        isPreparingToTerminate = true
+        coordinator?.stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     private func configureMainMenu() {
