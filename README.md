@@ -316,7 +316,7 @@ StickS3, and program it.
 - Front button: hold/click to record according to configuration; confirm pending paste.
 - Side button: cancel or restore the most recent recoverable input.
 - Device display: offline/booting, ready, listening, thinking, confirmation, Codex working, approval needed, done, and error states.
-- Firmware `0.1.1` and later shows `Codex done` with its version for five seconds, then returns to Ready.
+- Firmware `0.1.3` and later shows `Codex done` with its version for ten seconds, then returns to Ready.
 - XC Buddy normally disconnects explicitly when it quits. As a crash-only fallback, it renews the BLE connection lease with one small heartbeat every 30 seconds; firmware releases a stale macOS BLE link after 90 seconds. Heartbeats do not wake the display or postpone the five-minute deep-sleep timer.
 - Menu bar summary: device connection, ASR provider, output target, and Codex bridge status.
 

@@ -99,7 +99,7 @@ state from the app to the firmware display.
 Current desktop events:
 
 ```json
-{"event":"ui_state","state":"ready","text":""}
+{"event":"ui_state","state":"ready","text":"","background_state":"ready"}
 {"event":"ui_state","state":"recording","text":""}
 {"event":"ui_state","state":"thinking","text":"partial text"}
 {"event":"ui_state","state":"pending_confirmation","text":"final text"}
@@ -111,6 +111,7 @@ Current desktop events:
 {"event":"interaction_mode","mode":"hold_to_talk"}
 {"event":"interaction_mode","mode":"click_to_talk"}
 {"event":"codex_success_chime","enabled":true}
+{"event":"codex_notification_chime"}
 {"event":"power_timers","dim_seconds":30,"screen_off_seconds":300,"idle_sleep_seconds":300,"codex_sleep_seconds":900}
 {"event":"heartbeat"}
 {"event":"disconnect"}
@@ -119,7 +120,10 @@ Current desktop events:
 The desktop helper always includes a `text` field, even for states without text
 content. Firmware may immediately render local physical feedback, such as
 showing the recording cat when the primary button starts audio, but the app's
-`ui_state` is the authoritative display state. Current StickS3 firmware does not
+`ui_state` is the authoritative display state. XC Buddy applies each button
+event to its authoritative state and sends only the resulting state to the
+device. Reconnection uses the same XC Buddy-owned state; firmware-local state
+is never treated as the source of truth. Current StickS3 firmware does not
 render recognition text on-device because the LVGL font set does not include
 Chinese glyphs; `text` is used only to choose fixed English hints.
 
@@ -128,13 +132,20 @@ occurred while a paired Stick was disconnected or in deep sleep. It allows the
 reconnected Stick to play the completion chime once even though its volatile UI
 state restarted at `ready`.
 
+For `ready`, `background_state` records XC Buddy's underlying Codex state:
+`ready`, `codex_working`, or `approval_needed`. The Stick initially renders
+Ready after a front-button interaction, then uses this value at the next display
+dim transition instead of assuming that Ready always means Resting.
+
 `interaction_mode` controls the front-button behavior and idle screen hint.
 `hold_to_talk` starts audio on primary down and stops on primary up.
 `click_to_talk` starts audio on the first primary click and stops on the next
 primary click.
 
-`codex_success_chime` enables or disables the StickS3 completion sound. The
+`codex_success_chime` enables or disables Codex sounds on the StickS3. The
 desktop app sends the persisted XC Buddy setting whenever the device connects.
+`codex_notification_chime` plays the configured sound immediately without
+changing the display state.
 
 `power_timers` updates all inactivity stages in seconds. XC Buddy validates and
 persists the values, then sends them whenever the device connects or settings
@@ -146,8 +157,8 @@ Codex is Working or awaiting Approval.
 or power-management state. `disconnect` asks the peripheral to release the BLE
 link immediately during a normal app shutdown.
 
-In firmware `0.1.1` and later, `codex_done` displays the running firmware
-version for five seconds and then returns the device to `ready` automatically.
+In firmware `0.1.3` and later, `codex_done` displays the running firmware
+version for ten seconds and then returns the device to `ready` automatically.
 
 Deprecated app-to-firmware events:
 
@@ -273,8 +284,10 @@ During recognition and confirmation, the firmware keeps showing the thinking cat
 until the app sends `ui_state:ready`. During pending confirmation, `primary`
 confirms or pauses according to the app's internal countdown mode, and
 `secondary` cancels. When idle, `secondary` restores the last recoverable input
-confirmation. These meanings are app state-machine behavior, not firmware
-protocol events.
+confirmation. Cancelling that restored confirmation returns to the active
+Codex state when Codex is still Working or awaiting Approval, instead of
+resetting the Stick to Ready. These meanings are app state-machine behavior,
+not firmware protocol events.
 
 Recordings shorter than 0.5 seconds are discarded locally and are not sent to ASR.
 
