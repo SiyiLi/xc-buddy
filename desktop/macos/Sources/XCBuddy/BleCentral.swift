@@ -70,7 +70,14 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var otaCharacteristics: [UUID: CBCharacteristic] = [:]
     private var firmwareUpdateSession: FirmwareUpdateSession?
     private var interactionMode: InteractionMode = .holdToTalk
+    private var codexSuccessChime = true
+    private var powerTimers = DevicePowerTimers.default
     private var isWorkspaceSleeping = false
+    private var isStopping = false
+    private var heartbeatTimer: Timer?
+    private var connectionRecoveryTimer: Timer?
+    private var reconnectUIState = (state: "ready", text: "")
+    private var pendingCodexDoneDeviceIDs = Set<String>()
 
     var onConnectionChange: (([ConnectedXCDevice]) -> Void)?
     var onAudioFrame: ((UUID, AudioFrame) -> Void)?
@@ -86,7 +93,14 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func start() {
+        isStopping = false
         central = CBCentralManager(delegate: self, queue: .main)
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            self?.sendHeartbeat()
+        }
+        connectionRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.recoverSystemConnectionIfNeeded()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(workspaceWillSleep),
@@ -101,8 +115,30 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         )
     }
 
+    func stop() {
+        guard !isStopping else { return }
+        isStopping = true
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+        connectionRecoveryTimer?.invalidate()
+        connectionRecoveryTimer = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        central?.stopScan()
+        let disconnectPayload = BleProtocol.disconnectPayload()
+        for (id, characteristic) in controlCharacteristics {
+            peripherals[id]?.writeValue(disconnectPayload, for: characteristic, type: .withoutResponse)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            for peripheral in self.peripherals.values where peripheral.state != .disconnected {
+                self.central?.cancelPeripheralConnection(peripheral)
+            }
+        }
+    }
+
     func updatePairedDeviceIDs(_ deviceIDs: [String]) {
         pairedDeviceIDs = Set(deviceIDs)
+        pendingCodexDoneDeviceIDs.formIntersection(pairedDeviceIDs)
         for peripheral in peripherals.values {
             central.cancelPeripheralConnection(peripheral)
         }
@@ -116,8 +152,16 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         scanIfReady()
     }
 
-    func sendUIState(_ state: String, text: String = "", to peripheralID: UUID? = nil) {
-        let data = BleProtocol.uiStatePayload(state: state, text: text)
+    func sendUIState(_ state: String, text: String = "", to peripheralID: UUID? = nil,
+                     notifyCompletion: Bool = false) {
+        if peripheralID == nil {
+            rememberBroadcastUIState(state, text: text)
+        }
+        let data = BleProtocol.uiStatePayload(
+            state: state,
+            text: text,
+            notifyCompletion: notifyCompletion
+        )
         if let peripheralID {
             if let characteristic = controlCharacteristics[peripheralID] {
                 if let peripheral = peripherals[peripheralID] {
@@ -145,6 +189,36 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
     }
 
+    private func rememberBroadcastUIState(_ state: String, text: String) {
+        if state == "codex_done" {
+            let reachableDeviceIDs = Set<String>(controlCharacteristics.keys.compactMap { peripheralID in
+                guard peripherals[peripheralID]?.state == .connected else { return nil }
+                return connectedDevices[peripheralID]?.deviceID
+            })
+            pendingCodexDoneDeviceIDs.formUnion(pairedDeviceIDs.subtracting(reachableDeviceIDs))
+            reconnectUIState = ("ready", "")
+        } else {
+            reconnectUIState = (state, text)
+        }
+    }
+
+    private func restoreUIState(to peripheralID: UUID) {
+        if let deviceID = connectedDevices[peripheralID]?.deviceID,
+           pendingCodexDoneDeviceIDs.remove(deviceID) != nil {
+            sendUIState(
+                "codex_done",
+                text: "Turn complete",
+                to: peripheralID,
+                notifyCompletion: true
+            )
+            if reconnectUIState.state != "ready" {
+                sendUIState(reconnectUIState.state, text: reconnectUIState.text, to: peripheralID)
+            }
+            return
+        }
+        sendUIState(reconnectUIState.state, text: reconnectUIState.text, to: peripheralID)
+    }
+
     func sendInteractionMode(_ mode: InteractionMode, to peripheralID: UUID? = nil) {
         interactionMode = mode
         let data = BleProtocol.interactionModePayload(mode)
@@ -158,6 +232,49 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         for (id, characteristic) in controlCharacteristics {
             peripherals[id]?.writeValue(data, for: characteristic, type: .withoutResponse)
         }
+    }
+
+    func sendCodexSuccessChime(_ enabled: Bool, to peripheralID: UUID? = nil) {
+        codexSuccessChime = enabled
+        let data = BleProtocol.codexSuccessChimePayload(enabled)
+        if let peripheralID {
+            if let characteristic = controlCharacteristics[peripheralID] {
+                peripherals[peripheralID]?.writeValue(data, for: characteristic, type: .withoutResponse)
+            }
+            return
+        }
+
+        for (id, characteristic) in controlCharacteristics {
+            peripherals[id]?.writeValue(data, for: characteristic, type: .withoutResponse)
+        }
+    }
+
+    func sendPowerTimers(_ timers: DevicePowerTimers, to peripheralID: UUID? = nil) {
+        powerTimers = timers
+        let data = BleProtocol.powerTimersPayload(timers)
+        if let peripheralID {
+            if let characteristic = controlCharacteristics[peripheralID] {
+                peripherals[peripheralID]?.writeValue(data, for: characteristic, type: .withoutResponse)
+            }
+            return
+        }
+
+        for (id, characteristic) in controlCharacteristics {
+            peripherals[id]?.writeValue(data, for: characteristic, type: .withoutResponse)
+        }
+    }
+
+    private func sendHeartbeat() {
+        let data = BleProtocol.heartbeatPayload()
+        for (id, characteristic) in controlCharacteristics {
+            peripherals[id]?.writeValue(data, for: characteristic, type: .withoutResponse)
+        }
+    }
+
+    private func recoverSystemConnectionIfNeeded() {
+        guard connectedDevices.isEmpty, !isStopping, !isWorkspaceSleeping else { return }
+        restoreConnectedPeripherals()
+        scanIfReady()
     }
 
 
@@ -217,6 +334,10 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard !isStopping else {
+            central.stopScan()
+            return
+        }
         switch central.state {
         case .poweredOn:
             if !isWorkspaceSleeping {
@@ -233,7 +354,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        guard !isWorkspaceSleeping else { return }
+        guard !isWorkspaceSleeping, !isStopping else { return }
         guard shouldConnect(localName: localName, peripheralName: peripheral.name) else { return }
         if let existingPeripheral = peripherals[peripheral.identifier] {
             if existingPeripheral.state == .disconnected {
@@ -251,6 +372,10 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard !isStopping else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         connectedDevices[peripheral.identifier] = discoveredDevices[peripheral.identifier]
             ?? connectedDevice(localName: nil, peripheralName: peripheral.name)
         onConnectionChange?(currentConnectedDevices)
@@ -286,8 +411,10 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 peripheral.setNotifyValue(true, for: characteristic)
             case BleProtocol.controlUUID:
                 controlCharacteristics[peripheral.identifier] = characteristic
-                sendUIState("ready", to: peripheral.identifier)
                 sendInteractionMode(interactionMode, to: peripheral.identifier)
+                sendCodexSuccessChime(codexSuccessChime, to: peripheral.identifier)
+                sendPowerTimers(powerTimers, to: peripheral.identifier)
+                restoreUIState(to: peripheral.identifier)
             case BleProtocol.otaRXUUID:
                 otaCharacteristics[peripheral.identifier] = characteristic
             case BleProtocol.otaStateUUID:
@@ -457,6 +584,10 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     private func scanIfReady() {
         guard let central, central.state == .poweredOn else { return }
+        guard !isStopping else {
+            central.stopScan()
+            return
+        }
         guard !isWorkspaceSleeping else {
             central.stopScan()
             return

@@ -103,12 +103,16 @@ enum BleProtocol {
         return try? JSONDecoder().decode(FirmwareOTAStateEvent.self, from: payload)
     }
 
-    static func uiStatePayload(state: String, text: String) -> Data {
-        let payload = [
+    static func uiStatePayload(state: String, text: String,
+                               notifyCompletion: Bool = false) -> Data {
+        var payload: [String: Any] = [
             "event": "ui_state",
             "state": state,
             "text": text
         ]
+        if notifyCompletion {
+            payload["notify_completion"] = true
+        }
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 
@@ -117,6 +121,35 @@ enum BleProtocol {
             "event": "interaction_mode",
             "mode": mode.rawValue
         ]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    }
+
+    static func codexSuccessChimePayload(_ enabled: Bool) -> Data {
+        let payload: [String: Any] = [
+            "event": "codex_success_chime",
+            "enabled": enabled
+        ]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    }
+
+    static func powerTimersPayload(_ timers: DevicePowerTimers) -> Data {
+        let payload: [String: Any] = [
+            "event": "power_timers",
+            "dim_seconds": timers.displayDimSeconds,
+            "screen_off_seconds": timers.displayOffSeconds,
+            "idle_sleep_seconds": timers.idleDeepSleepSeconds,
+            "codex_sleep_seconds": timers.codexDeepSleepSeconds
+        ]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    }
+
+    static func heartbeatPayload() -> Data {
+        let payload = ["event": "heartbeat"]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    }
+
+    static func disconnectPayload() -> Data {
+        let payload = ["event": "disconnect"]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 
