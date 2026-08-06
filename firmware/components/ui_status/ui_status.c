@@ -502,9 +502,11 @@ void ui_status_set_approval_needed(void)
     set_scene(UI_STATUS_ICON_PAIRING, "Approval needed", "Check Codex on Mac");
 }
 
-void ui_status_set_codex_done(void)
+void ui_status_set_codex_done(const char *version)
 {
-    set_scene(UI_STATUS_ICON_IDLE, "Codex done", "Ready for voice");
+    char hint[48];
+    snprintf(hint, sizeof(hint), "v%s - ready in 5s", version ? version : "unknown");
+    set_scene(UI_STATUS_ICON_IDLE, "Codex done", hint);
 }
 
 void ui_status_set_ota_progress(uint32_t written, uint32_t size)

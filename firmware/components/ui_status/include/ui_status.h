@@ -19,7 +19,7 @@ void ui_status_set_partial_text(const char *text);
 void ui_status_set_pending_confirmation(void);
 void ui_status_set_codex_working(void);
 void ui_status_set_approval_needed(void);
-void ui_status_set_codex_done(void);
+void ui_status_set_codex_done(const char *version);
 void ui_status_set_ota_progress(uint32_t written, uint32_t size);
 void ui_status_set_ota_rebooting(void);
 void ui_status_set_error(const char *message);

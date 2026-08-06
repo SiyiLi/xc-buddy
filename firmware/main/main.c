@@ -9,6 +9,7 @@
 #include "button_gpio.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_pm.h"
 #include "esp_sleep.h"
@@ -26,11 +27,13 @@
 static const char *TAG = "voice_stick";
 
 #define BATTERY_REFRESH_FALLBACK_MS (10 * 1000)
+#define CODEX_DONE_TIMEOUT_MS (5 * 1000)
 #define DISPLAY_DIM_TIMEOUT_MS (30 * 1000)
 #define DISPLAY_ACTIVE_BRIGHTNESS 128
 #define DISPLAY_DIM_BRIGHTNESS 32
 #define DISPLAY_DIM_TIMEOUT_US (DISPLAY_DIM_TIMEOUT_MS * 1000ULL)
 #define BATTERY_REFRESH_FALLBACK_US (BATTERY_REFRESH_FALLBACK_MS * 1000ULL)
+#define CODEX_DONE_TIMEOUT_US (CODEX_DONE_TIMEOUT_MS * 1000ULL)
 #define DEEP_SLEEP_TIMEOUT_MS (5 * 60 * 1000)
 #define DEEP_SLEEP_TIMEOUT_US (DEEP_SLEEP_TIMEOUT_MS * 1000ULL)
 
@@ -46,6 +49,7 @@ static esp_timer_handle_t s_display_dim_timer;
 static esp_timer_handle_t s_deep_sleep_timer;
 static esp_timer_handle_t s_battery_refresh_timer;
 static esp_timer_handle_t s_host_response_timer;
+static esp_timer_handle_t s_codex_done_timer;
 static uint32_t s_session_id = 1;
 static QueueHandle_t s_app_event_queue;
 static button_handle_t s_front_button;
@@ -113,6 +117,7 @@ typedef enum {
     APP_EVENT_OTA_DONE,
     APP_EVENT_OTA_END,
     APP_EVENT_HOST_RESPONSE_TIMEOUT,
+    APP_EVENT_CODEX_DONE_TIMEOUT,
 } app_event_type_t;
 
 typedef struct {
@@ -256,6 +261,26 @@ static void stop_host_response_timer(void)
     }
 }
 
+static void stop_codex_done_timer(void)
+{
+    if (s_codex_done_timer) {
+        (void)esp_timer_stop(s_codex_done_timer);
+    }
+}
+
+static void start_codex_done_timer(void)
+{
+    if (!s_codex_done_timer) {
+        return;
+    }
+
+    stop_codex_done_timer();
+    esp_err_t err = esp_timer_start_once(s_codex_done_timer, CODEX_DONE_TIMEOUT_US);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "start Codex done timer failed: %s", esp_err_to_name(err));
+    }
+}
+
 static void enter_deep_sleep(void)
 {
     if (s_recording || s_ota_updating || voice_ble_ota_is_active()) {
@@ -359,6 +384,8 @@ static uint32_t start_recording(void)
                  s_recording, s_ota_updating, ota_active, ble_ready, s_app_ui_state);
         return 0;
     }
+
+    stop_codex_done_timer();
 
     const uint32_t session_id = s_session_id++;
     esp_err_t err = acquire_recording_pm_locks();
@@ -538,6 +565,7 @@ static void apply_app_ui_state(const char *state, const char *text)
              app_ui_state_name(s_app_ui_state),
              s_recording);
     stop_host_response_timer();
+    stop_codex_done_timer();
     if (strcmp(state, "ready") == 0) {
         if (s_recording) {
             ESP_LOGI(TAG, "ignore ready ui_state while recording");
@@ -565,8 +593,11 @@ static void apply_app_ui_state(const char *state, const char *text)
         s_app_ui_state = APP_UI_STATE_APPROVAL_NEEDED;
         ui_status_set_approval_needed();
     } else if (strcmp(state, "codex_done") == 0) {
+        const esp_app_desc_t *app_desc = esp_app_get_description();
+        note_activity();
         s_app_ui_state = APP_UI_STATE_CODEX_DONE;
-        ui_status_set_codex_done();
+        ui_status_set_codex_done(app_desc ? app_desc->version : NULL);
+        start_codex_done_timer();
     } else if (strcmp(state, "error") == 0) {
         s_app_ui_state = APP_UI_STATE_ERROR;
         ui_status_set_error(text && text[0] ? text : "Unknown error");
@@ -690,6 +721,7 @@ static void app_event_task(void *arg)
             apply_app_ui_state(event.state, event.text);
             break;
         case APP_EVENT_BLE_CONNECTED:
+            stop_codex_done_timer();
             s_app_ui_state = APP_UI_STATE_READY;
             ui_status_set_idle();
             note_activity();
@@ -699,6 +731,7 @@ static void app_event_task(void *arg)
             s_ota_updating = false;
             s_app_ui_state = APP_UI_STATE_READY;
             stop_host_response_timer();
+            stop_codex_done_timer();
             audio_pipeline_stop();
             release_recording_pm_locks();
             release_ota_pm_locks();
@@ -714,6 +747,7 @@ static void app_event_task(void *arg)
             enter_deep_sleep();
             break;
         case APP_EVENT_OTA_BEGIN:
+            stop_codex_done_timer();
             s_ota_updating = true;
             if (s_recording) {
                 const uint32_t session_id = stop_recording();
@@ -739,6 +773,7 @@ static void app_event_task(void *arg)
             release_ota_pm_locks();
             s_app_ui_state = APP_UI_STATE_READY;
             stop_host_response_timer();
+            stop_codex_done_timer();
             ui_status_set_idle();
             note_activity();
             break;
@@ -746,6 +781,13 @@ static void app_event_task(void *arg)
             if (!s_recording && (s_app_ui_state == APP_UI_STATE_RECORDING ||
                                  s_app_ui_state == APP_UI_STATE_THINKING)) {
                 ESP_LOGW(TAG, "host response timeout, returning to ready");
+                apply_app_ui_state("ready", "");
+            }
+            break;
+        case APP_EVENT_CODEX_DONE_TIMEOUT:
+            if (!s_recording && !s_ota_updating &&
+                s_app_ui_state == APP_UI_STATE_CODEX_DONE) {
+                ESP_LOGI(TAG, "Codex done timeout, returning to ready");
                 apply_app_ui_state("ready", "");
             }
             break;
@@ -844,6 +886,12 @@ static void host_response_timer_cb(void *arg)
     queue_app_event(APP_EVENT_HOST_RESPONSE_TIMEOUT);
 }
 
+static void codex_done_timer_cb(void *arg)
+{
+    (void)arg;
+    queue_app_event(APP_EVENT_CODEX_DONE_TIMEOUT);
+}
+
 static esp_err_t init_deep_sleep_timer(void)
 {
     const esp_timer_create_args_t timer_args = {
@@ -860,6 +908,15 @@ static esp_err_t init_host_response_timer(void)
         .name = "host_response",
     };
     return esp_timer_create(&timer_args, &s_host_response_timer);
+}
+
+static esp_err_t init_codex_done_timer(void)
+{
+    const esp_timer_create_args_t timer_args = {
+        .callback = codex_done_timer_cb,
+        .name = "codex_done",
+    };
+    return esp_timer_create(&timer_args, &s_codex_done_timer);
 }
 
 static void battery_refresh_timer_cb(void *arg)
@@ -981,6 +1038,7 @@ void app_main(void)
     ESP_ERROR_CHECK(init_display_dim_timer());
     ESP_ERROR_CHECK(init_deep_sleep_timer());
     ESP_ERROR_CHECK(init_host_response_timer());
+    ESP_ERROR_CHECK(init_codex_done_timer());
     note_activity();
     voice_ble_set_connection_callback(ble_connection_cb);
     voice_ble_set_control_callback(ble_control_cb);
