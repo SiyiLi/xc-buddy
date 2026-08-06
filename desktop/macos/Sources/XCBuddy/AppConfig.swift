@@ -109,6 +109,20 @@ struct OutputProfile: Equatable {
     }
 }
 
+struct DevicePowerTimers: Equatable {
+    var displayDimSeconds: Int
+    var displayOffSeconds: Int
+    var idleDeepSleepSeconds: Int
+    var codexDeepSleepSeconds: Int
+
+    static let `default` = DevicePowerTimers(
+        displayDimSeconds: 30,
+        displayOffSeconds: 5 * 60,
+        idleDeepSleepSeconds: 5 * 60,
+        codexDeepSleepSeconds: 15 * 60
+    )
+}
+
 struct AppConfig {
     var openAIBaseURL: String
     var openAIAPIKey: String
@@ -130,6 +144,8 @@ struct AppConfig {
     var debugAudioDirectory: URL
     var codexBridgePort: Int
     var codexBridgeToken: String
+    var codexSuccessChime: Bool
+    var devicePowerTimers: DevicePowerTimers
 
     static var configDirectory: URL {
         FileManager.default
@@ -172,7 +188,9 @@ struct AppConfig {
             debugAudioCache: false,
             debugAudioDirectory: defaultDebugAudioDirectory,
             codexBridgePort: 17321,
-            codexBridgeToken: ""
+            codexBridgeToken: "",
+            codexSuccessChime: true,
+            devicePowerTimers: .default
         )
     }
 
@@ -220,7 +238,18 @@ struct AppConfig {
             debugAudioCache: file.debug_audio_cache ?? defaults.debugAudioCache,
             debugAudioDirectory: directoryValue(file.debug_audio_dir, default: defaults.debugAudioDirectory),
             codexBridgePort: portValue(file.codex_bridge_port, default: defaults.codexBridgePort),
-            codexBridgeToken: file.codex_bridge_token ?? defaults.codexBridgeToken
+            codexBridgeToken: file.codex_bridge_token ?? defaults.codexBridgeToken,
+            codexSuccessChime: file.codex_success_chime ?? defaults.codexSuccessChime,
+            devicePowerTimers: DevicePowerTimers(
+                displayDimSeconds: durationValue(file.display_dim_seconds, range: 5...3600,
+                                                 default: defaults.devicePowerTimers.displayDimSeconds),
+                displayOffSeconds: durationValue(file.display_off_seconds, range: 30...86400,
+                                                 default: defaults.devicePowerTimers.displayOffSeconds),
+                idleDeepSleepSeconds: durationValue(file.idle_deep_sleep_seconds, range: 60...86400,
+                                                    default: defaults.devicePowerTimers.idleDeepSleepSeconds),
+                codexDeepSleepSeconds: durationValue(file.codex_deep_sleep_seconds, range: 60...86400,
+                                                     default: defaults.devicePowerTimers.codexDeepSleepSeconds)
+            )
         )
     }
 
@@ -245,6 +274,11 @@ struct AppConfig {
         debug_audio_dir = "\(debugAudioDirectory.path.tomlEscaped)"
         codex_bridge_port = \(codexBridgePort)
         codex_bridge_token = "\(codexBridgeToken.tomlEscaped)"
+        codex_success_chime = \(codexSuccessChime.tomlValue)
+        display_dim_seconds = \(devicePowerTimers.displayDimSeconds)
+        display_off_seconds = \(devicePowerTimers.displayOffSeconds)
+        idle_deep_sleep_seconds = \(devicePowerTimers.idleDeepSleepSeconds)
+        codex_deep_sleep_seconds = \(devicePowerTimers.codexDeepSleepSeconds)
 
         [output]
         target = "\(defaultOutputProfile.target.rawValue)"
@@ -291,7 +325,22 @@ struct AppConfig {
             debugAudioCache: boolValue(values["debug_audio_cache"], default: defaults.debugAudioCache),
             debugAudioDirectory: directoryValue(values["debug_audio_dir"], default: defaults.debugAudioDirectory),
             codexBridgePort: portValue(values["codex_bridge_port"].flatMap(Int.init), default: defaults.codexBridgePort),
-            codexBridgeToken: values["codex_bridge_token"] ?? defaults.codexBridgeToken
+            codexBridgeToken: values["codex_bridge_token"] ?? defaults.codexBridgeToken,
+            codexSuccessChime: boolValue(values["codex_success_chime"], default: defaults.codexSuccessChime),
+            devicePowerTimers: DevicePowerTimers(
+                displayDimSeconds: durationValue(values["display_dim_seconds"].flatMap(Int.init),
+                                                 range: 5...3600,
+                                                 default: defaults.devicePowerTimers.displayDimSeconds),
+                displayOffSeconds: durationValue(values["display_off_seconds"].flatMap(Int.init),
+                                                 range: 30...86400,
+                                                 default: defaults.devicePowerTimers.displayOffSeconds),
+                idleDeepSleepSeconds: durationValue(values["idle_deep_sleep_seconds"].flatMap(Int.init),
+                                                    range: 60...86400,
+                                                    default: defaults.devicePowerTimers.idleDeepSleepSeconds),
+                codexDeepSleepSeconds: durationValue(values["codex_deep_sleep_seconds"].flatMap(Int.init),
+                                                     range: 60...86400,
+                                                     default: defaults.devicePowerTimers.codexDeepSleepSeconds)
+            )
         )
     }
 
@@ -319,6 +368,12 @@ struct AppConfig {
 
     private static func portValue(_ value: Int?, default defaultValue: Int) -> Int {
         guard let value, (1...65535).contains(value) else { return defaultValue }
+        return value
+    }
+
+    private static func durationValue(_ value: Int?, range: ClosedRange<Int>,
+                                      default defaultValue: Int) -> Int {
+        guard let value, range.contains(value) else { return defaultValue }
         return value
     }
 
@@ -510,6 +565,11 @@ private struct ConfigFile: Decodable {
     var debug_audio_dir: String?
     var codex_bridge_port: Int?
     var codex_bridge_token: String?
+    var codex_success_chime: Bool?
+    var display_dim_seconds: Int?
+    var display_off_seconds: Int?
+    var idle_deep_sleep_seconds: Int?
+    var codex_deep_sleep_seconds: Int?
     var output: OutputConfigFile?
     var device: [String: DeviceConfigFile]?
 }

@@ -4,7 +4,6 @@ final class SettingsWindowController: NSWindowController {
     private let apiKeyField = NSTextField()
     private let openAIBaseURLField = NSTextField()
     private let openAIModelField = NSTextField()
-    private let openAILanguageField = NSTextField()
     private let openAIPromptField = NSTextField()
     private let hotwordsTextView = NSTextView()
     private let hotwordsScrollView = NSScrollView()
@@ -15,7 +14,15 @@ final class SettingsWindowController: NSWindowController {
     private let debugAudioDirectoryField = NSTextField()
     private let statusLabel = NSTextField(labelWithString: "")
     private let codexBridgePortField = NSTextField()
-    private let codexBridgeTokenField = NSSecureTextField()
+    private let codexSuccessChimeButton = NSButton(
+        checkboxWithTitle: "Play on Stick when Codex finishes",
+        target: nil,
+        action: nil
+    )
+    private let displayDimSecondsField = NSTextField()
+    private let displayOffMinutesField = NSTextField()
+    private let idleSleepMinutesField = NSTextField()
+    private let codexSleepMinutesField = NSTextField()
     var onConfigChanged: ((AppConfig) -> Void)?
 
     private var config: AppConfig
@@ -23,7 +30,7 @@ final class SettingsWindowController: NSWindowController {
     init(config: AppConfig = AppConfig.load()) {
         self.config = config
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 730),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 760),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -62,7 +69,6 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(row(label: "API Key", control: apiKeyField))
         stack.addArrangedSubview(row(label: "Base URL", control: openAIBaseURLField))
         stack.addArrangedSubview(row(label: "Model", control: openAIModelField))
-        stack.addArrangedSubview(row(label: "Language", control: openAILanguageField))
         stack.addArrangedSubview(row(label: "Prompt", control: openAIPromptField))
         configureHotwordsTextView()
         stack.addArrangedSubview(row(label: "Hotwords", control: hotwordsScrollView))
@@ -75,7 +81,17 @@ final class SettingsWindowController: NSWindowController {
 
         stack.addArrangedSubview(sectionTitle("Codex Bridge (Loopback Only)"))
         stack.addArrangedSubview(row(label: "Port", control: codexBridgePortField))
-        stack.addArrangedSubview(row(label: "Bearer Token", control: codexBridgeTokenField))
+        stack.addArrangedSubview(row(label: "Success Chime", control: codexSuccessChimeButton))
+
+        stack.addArrangedSubview(sectionTitle("Stick Power"))
+        stack.addArrangedSubview(timerRow(label: "Display", timers: [
+            ("Dim", displayDimSecondsField, "sec"),
+            ("Off", displayOffMinutesField, "min")
+        ]))
+        stack.addArrangedSubview(timerRow(label: "Deep Sleep", timers: [
+            ("Idle", idleSleepMinutesField, "min"),
+            ("Codex", codexSleepMinutesField, "min")
+        ]))
 
         stack.addArrangedSubview(sectionTitle("Debug"))
         stack.addArrangedSubview(row(label: "Audio Cache", control: debugAudioButton))
@@ -149,7 +165,6 @@ final class SettingsWindowController: NSWindowController {
         apiKeyField.stringValue = config.openAIAPIKey
         openAIBaseURLField.stringValue = config.openAIBaseURL
         openAIModelField.stringValue = config.openAIModel
-        openAILanguageField.stringValue = config.openAILanguage
         openAIPromptField.stringValue = config.openAIPrompt
         hotwordsTextView.string = config.asrHotwords.joined(separator: ",")
         llmBaseURLField.stringValue = config.llmBaseURL
@@ -158,7 +173,11 @@ final class SettingsWindowController: NSWindowController {
         debugAudioButton.state = config.debugAudioCache ? .on : .off
         debugAudioDirectoryField.stringValue = config.debugAudioDirectory.path
         codexBridgePortField.integerValue = config.codexBridgePort
-        codexBridgeTokenField.stringValue = config.codexBridgeToken
+        codexSuccessChimeButton.state = config.codexSuccessChime ? .on : .off
+        displayDimSecondsField.integerValue = config.devicePowerTimers.displayDimSeconds
+        displayOffMinutesField.stringValue = minuteText(config.devicePowerTimers.displayOffSeconds)
+        idleSleepMinutesField.stringValue = minuteText(config.devicePowerTimers.idleDeepSleepSeconds)
+        codexSleepMinutesField.stringValue = minuteText(config.devicePowerTimers.codexDeepSleepSeconds)
 
         statusLabel.stringValue = ""
     }
@@ -179,7 +198,7 @@ final class SettingsWindowController: NSWindowController {
             openAIBaseURL: openAIBaseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             openAIAPIKey: apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             openAIModel: openAIModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
-            openAILanguage: openAILanguageField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            openAILanguage: config.openAILanguage,
             openAIPrompt: openAIPromptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             llmBaseURL: llmBaseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             llmAPIKey: llmAPIKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -195,7 +214,17 @@ final class SettingsWindowController: NSWindowController {
             debugAudioCache: debugAudioButton.state == .on,
             debugAudioDirectory: URL(fileURLWithPath: debugAudioDirectoryField.stringValue, isDirectory: true),
             codexBridgePort: max(1, min(65535, codexBridgePortField.integerValue)),
-            codexBridgeToken: codexBridgeTokenField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            codexBridgeToken: config.codexBridgeToken,
+            codexSuccessChime: codexSuccessChimeButton.state == .on,
+            devicePowerTimers: DevicePowerTimers(
+                displayDimSeconds: max(5, min(3600, displayDimSecondsField.integerValue)),
+                displayOffSeconds: seconds(fromMinutesField: displayOffMinutesField,
+                                           range: 30...86400),
+                idleDeepSleepSeconds: seconds(fromMinutesField: idleSleepMinutesField,
+                                              range: 60...86400),
+                codexDeepSleepSeconds: seconds(fromMinutesField: codexSleepMinutesField,
+                                               range: 60...86400)
+            )
         )
 
         do {
@@ -248,6 +277,55 @@ final class SettingsWindowController: NSWindowController {
         row.addArrangedSubview(labelView)
         row.addArrangedSubview(control)
         return row
+    }
+
+    private func timerRow(label: String, timers: [(String, NSTextField, String)]) -> NSStackView {
+        let controls = NSStackView()
+        controls.orientation = .horizontal
+        controls.alignment = .centerY
+        controls.spacing = 16
+
+        for (name, field, unit) in timers {
+            let timer = NSStackView()
+            timer.orientation = .horizontal
+            timer.alignment = .centerY
+            timer.spacing = 6
+
+            let nameLabel = NSTextField(labelWithString: name)
+            nameLabel.alignment = .right
+            nameLabel.textColor = .secondaryLabelColor
+            nameLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            field.alignment = .right
+            field.widthAnchor.constraint(equalToConstant: 52).isActive = true
+            let unitLabel = NSTextField(labelWithString: unit)
+            unitLabel.textColor = .secondaryLabelColor
+            unitLabel.widthAnchor.constraint(equalToConstant: 24).isActive = true
+
+            timer.addArrangedSubview(nameLabel)
+            timer.addArrangedSubview(field)
+            timer.addArrangedSubview(unitLabel)
+            controls.addArrangedSubview(timer)
+        }
+
+        return row(label: label, control: controls)
+    }
+
+    private func minuteText(_ seconds: Int) -> String {
+        if seconds.isMultiple(of: 60) {
+            return String(seconds / 60)
+        }
+        var text = String(format: "%.2f", Double(seconds) / 60.0)
+        while text.last == "0" { text.removeLast() }
+        if text.last == "." { text.removeLast() }
+        return text
+    }
+
+    private func seconds(fromMinutesField field: NSTextField,
+                         range: ClosedRange<Int>) -> Int {
+        let seconds = (field.doubleValue * 60.0).rounded()
+        guard seconds.isFinite else { return range.lowerBound }
+        let bounded = min(max(seconds, Double(range.lowerBound)), Double(range.upperBound))
+        return Int(bounded)
     }
 
     private func hintRow(_ text: String) -> NSStackView {
