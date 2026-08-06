@@ -172,6 +172,7 @@ final class XCBuddyCoordinator {
     }
 
     func start() {
+        statusController.setTranscriptionProvider("NVIDIA Inference")
         ble.onConnectionChange = { [weak self] connectedDevices in
             guard let self else { return }
             self.statusController.setConnectedDevices(connectedDevices)
@@ -198,6 +199,11 @@ final class XCBuddyCoordinator {
         ble.start()
         checkFirmwareUpdatesIfNeeded(force: false)
         startFirmwareReleaseRefreshTimer()
+    }
+
+    func updateDeviceThemeColors(_ colors: [String: OverlayThemeColor]) {
+        config.deviceThemeColors = colors
+        subtitleController.setThemeColors(colors)
     }
 
     deinit {

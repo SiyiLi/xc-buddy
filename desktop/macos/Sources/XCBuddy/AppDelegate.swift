@@ -160,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try config.save()
             self.config = config
             statusController?.setDeviceThemeColors(config.deviceThemeColors)
+            coordinator?.updateDeviceThemeColors(config.deviceThemeColors)
         } catch {
             statusController?.setStatus("Theme save failed")
         }

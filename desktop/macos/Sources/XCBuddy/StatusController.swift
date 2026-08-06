@@ -141,6 +141,9 @@ final class StatusController {
 
     func setDeviceThemeColors(_ colors: [String: OverlayThemeColor]) {
         deviceThemeColors = colors.filter { pairedDeviceIDs.contains($0.key) }
+        for (key, overlay) in overlays {
+            overlay.setThemeColor(themeColor(for: deviceID(forOverlayKey: key)))
+        }
         rebuildMenu()
     }
 
@@ -384,9 +387,9 @@ final class StatusController {
     }
 
     private func addThemeColorItems(to submenu: NSMenu, deviceID: String) {
-        let currentColor = deviceThemeColors[deviceID] ?? .white
+        let currentColor = deviceThemeColors[AppConfig.normalizedDeviceID(deviceID)] ?? .white
         let themeItem = makeMenuItem(
-            title: "Theme Color",
+            title: "Overlay Color",
             symbolName: "paintpalette",
             action: nil
         )
@@ -465,7 +468,14 @@ final class StatusController {
 
     private func addFirmwareItems(to submenu: NSMenu, deviceID: String, isConnected: Bool) {
         let info = firmwareInfoByDeviceID[deviceID]
-        let currentTitle = info?.currentVersion.map { "Firmware \($0)" } ?? "Firmware Unknown"
+        let currentTitle: String
+        if let currentVersion = info?.currentVersion {
+            currentTitle = "Firmware \(currentVersion)"
+        } else if isConnected {
+            currentTitle = "Reading Firmware..."
+        } else {
+            currentTitle = "Connect Device to Read Firmware"
+        }
         let currentItem = NSMenuItem(title: currentTitle, action: nil, keyEquivalent: "")
         currentItem.isEnabled = false
         currentItem.image = Self.symbolImage(named: "info.circle", accessibilityDescription: currentTitle)

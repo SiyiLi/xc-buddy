@@ -79,6 +79,17 @@ final class SubtitleController {
         }
     }
 
+    func setThemeColors(_ colors: [String: OverlayThemeColor]) {
+        DispatchQueue.main.async {
+            for deviceID in Array(self.lanes.keys) {
+                guard var lane = self.lanes[deviceID] else { continue }
+                lane.color = colors[deviceID] ?? .white
+                self.lanes[deviceID] = lane
+            }
+            self.render()
+        }
+    }
+
     private func hideLane(deviceID: String, generation: Int) {
         let key = AppConfig.normalizedDeviceID(deviceID)
         guard lanes[key]?.generation == generation else { return }
