@@ -6,6 +6,7 @@
 
 esp_err_t ui_status_init(void);
 esp_err_t ui_status_set_brightness(uint8_t brightness);
+esp_err_t ui_status_set_display_enabled(bool enabled);
 void ui_status_prepare_deep_sleep(void);
 void ui_status_set_device_name(const char *device_name);
 void ui_status_set_advertising(void);

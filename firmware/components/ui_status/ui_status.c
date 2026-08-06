@@ -379,18 +379,24 @@ esp_err_t ui_status_set_brightness(uint8_t brightness)
     return ledc_update_duty(LCD_BACKLIGHT_LEDC_MODE, LCD_BACKLIGHT_LEDC_CHANNEL);
 }
 
-void ui_status_prepare_deep_sleep(void)
+esp_err_t ui_status_set_display_enabled(bool enabled)
 {
-    (void)ui_status_set_brightness(0);
-
+    esp_err_t err = ESP_ERR_INVALID_STATE;
     _lock_acquire(&s_lvgl_lock);
     if (s_display) {
         esp_lcd_panel_handle_t panel = lv_display_get_user_data(s_display);
         if (panel) {
-            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_disp_on_off(panel, false));
+            err = esp_lcd_panel_disp_on_off(panel, enabled);
         }
     }
     _lock_release(&s_lvgl_lock);
+    return err;
+}
+
+void ui_status_prepare_deep_sleep(void)
+{
+    (void)ui_status_set_brightness(0);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ui_status_set_display_enabled(false));
 }
 
 void ui_status_set_device_name(const char *device_name)
@@ -494,12 +500,12 @@ void ui_status_set_pending_confirmation(void)
 
 void ui_status_set_codex_working(void)
 {
-    set_scene(UI_STATUS_ICON_TRANSCRIBING, "Codex working", "XC cycle active");
+    set_scene(UI_STATUS_ICON_TRANSCRIBING, "Codex", "Working");
 }
 
 void ui_status_set_approval_needed(void)
 {
-    set_scene(UI_STATUS_ICON_PAIRING, "Approval needed", "Check Codex on Mac");
+    set_scene(UI_STATUS_ICON_PAIRING, "Approval", "Needed");
 }
 
 void ui_status_set_codex_done(const char *version)
