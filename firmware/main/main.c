@@ -28,24 +28,28 @@ static const char *TAG = "voice_stick";
 
 #define BATTERY_REFRESH_FALLBACK_MS (10 * 1000)
 #define CODEX_DONE_TIMEOUT_MS (5 * 1000)
-#define DISPLAY_DIM_TIMEOUT_MS (30 * 1000)
+#define DEFAULT_DISPLAY_DIM_SECONDS 30
+#define DEFAULT_DISPLAY_OFF_SECONDS (5 * 60)
+#define DEFAULT_IDLE_DEEP_SLEEP_SECONDS (5 * 60)
+#define DEFAULT_CODEX_DEEP_SLEEP_SECONDS (15 * 60)
 #define DISPLAY_ACTIVE_BRIGHTNESS 128
 #define DISPLAY_DIM_BRIGHTNESS 32
-#define DISPLAY_DIM_TIMEOUT_US (DISPLAY_DIM_TIMEOUT_MS * 1000ULL)
 #define BATTERY_REFRESH_FALLBACK_US (BATTERY_REFRESH_FALLBACK_MS * 1000ULL)
 #define CODEX_DONE_TIMEOUT_US (CODEX_DONE_TIMEOUT_MS * 1000ULL)
-#define DEEP_SLEEP_TIMEOUT_MS (5 * 60 * 1000)
-#define DEEP_SLEEP_TIMEOUT_US (DEEP_SLEEP_TIMEOUT_MS * 1000ULL)
+#define SECONDS_TO_US(seconds) ((uint64_t)(seconds) * 1000000ULL)
 
 static bool s_recording;
 static bool s_ota_updating;
 static bool s_display_dimmed;
+static bool s_display_off;
 static bool s_recording_pm_locked;
 static bool s_ota_pm_locked;
 static bool s_battery_charging;
 static bool s_usb_powered;
+static bool s_codex_success_chime_enabled = true;
 static esp_pm_lock_handle_t s_cpu_freq_lock;
 static esp_timer_handle_t s_display_dim_timer;
+static esp_timer_handle_t s_display_off_timer;
 static esp_timer_handle_t s_deep_sleep_timer;
 static esp_timer_handle_t s_battery_refresh_timer;
 static esp_timer_handle_t s_host_response_timer;
@@ -56,7 +60,12 @@ static button_handle_t s_front_button;
 static button_handle_t s_side_button;
 static int64_t s_primary_down_us;
 static int64_t s_secondary_down_us;
+static int64_t s_last_activity_us;
 static uint32_t s_primary_session_id;
+static uint64_t s_display_dim_timeout_us = SECONDS_TO_US(DEFAULT_DISPLAY_DIM_SECONDS);
+static uint64_t s_display_off_timeout_us = SECONDS_TO_US(DEFAULT_DISPLAY_OFF_SECONDS);
+static uint64_t s_idle_deep_sleep_timeout_us = SECONDS_TO_US(DEFAULT_IDLE_DEEP_SLEEP_SECONDS);
+static uint64_t s_codex_deep_sleep_timeout_us = SECONDS_TO_US(DEFAULT_CODEX_DEEP_SLEEP_SECONDS);
 
 typedef enum {
     APP_UI_STATE_READY,
@@ -109,6 +118,8 @@ typedef enum {
     APP_EVENT_UI_STATE,
     APP_EVENT_BLE_CONNECTED,
     APP_EVENT_BLE_DISCONNECTED,
+    APP_EVENT_BLE_DISCONNECT_REQUEST,
+    APP_EVENT_POWER_TIMERS,
     APP_EVENT_POWER_IRQ,
     APP_EVENT_BATTERY_REFRESH,
     APP_EVENT_ENTER_DEEP_SLEEP,
@@ -124,6 +135,11 @@ typedef struct {
     app_event_type_t type;
     uint32_t written;
     uint32_t size;
+    uint32_t dim_seconds;
+    uint32_t screen_off_seconds;
+    uint32_t idle_sleep_seconds;
+    uint32_t codex_sleep_seconds;
+    bool notify_completion;
     char state[32];
     char text[96];
 } app_event_t;
@@ -131,7 +147,9 @@ typedef struct {
 static void update_battery_status(void);
 static void queue_app_event(app_event_type_t type);
 static void queue_app_event_with_ota(app_event_type_t type, uint32_t written, uint32_t size);
-static void queue_ui_state_event(const char *state, const char *text);
+static void queue_power_timers_event(uint32_t dim_seconds, uint32_t screen_off_seconds,
+                                     uint32_t idle_sleep_seconds, uint32_t codex_sleep_seconds);
+static void queue_ui_state_event(const char *state, const char *text, bool notify_completion);
 static void apply_interaction_mode(interaction_mode_t mode);
 
 static bool is_external_powered(void)
@@ -215,9 +233,24 @@ static void restart_display_dim_timer(void)
 
     (void)esp_timer_stop(s_display_dim_timer);
     if (!s_recording && !s_ota_updating) {
-        esp_err_t err = esp_timer_start_once(s_display_dim_timer, DISPLAY_DIM_TIMEOUT_US);
+        esp_err_t err = esp_timer_start_once(s_display_dim_timer, s_display_dim_timeout_us);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "start dim timer failed: %s", esp_err_to_name(err));
+        }
+    }
+}
+
+static void restart_display_off_timer(void)
+{
+    if (!s_display_off_timer) {
+        return;
+    }
+
+    (void)esp_timer_stop(s_display_off_timer);
+    if (!s_recording && !s_ota_updating) {
+        esp_err_t err = esp_timer_start_once(s_display_off_timer, s_display_off_timeout_us);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "start display off timer failed: %s", esp_err_to_name(err));
         }
     }
 }
@@ -229,8 +262,12 @@ static void restart_deep_sleep_timer(void)
     }
 
     (void)esp_timer_stop(s_deep_sleep_timer);
+    const bool codex_active = s_app_ui_state == APP_UI_STATE_CODEX_WORKING ||
+                              s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED;
+    const uint64_t timeout_us = codex_active ? s_codex_deep_sleep_timeout_us
+                                             : s_idle_deep_sleep_timeout_us;
     if (!s_recording && !s_ota_updating && !is_external_powered()) {
-        esp_err_t err = esp_timer_start_once(s_deep_sleep_timer, DEEP_SLEEP_TIMEOUT_US);
+        esp_err_t err = esp_timer_start_once(s_deep_sleep_timer, timeout_us);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "start deep sleep timer failed: %s", esp_err_to_name(err));
         }
@@ -241,16 +278,29 @@ static void restart_deep_sleep_timer(void)
 
 static void note_activity(void)
 {
-    if (s_display_dimmed) {
+    s_last_activity_us = esp_timer_get_time();
+    if (s_display_off || s_display_dimmed) {
+        bool restored = true;
+        if (s_display_off) {
+            esp_err_t err = ui_status_set_display_enabled(true);
+            if (err != ESP_OK) {
+                restored = false;
+                ESP_LOGW(TAG, "turn display on failed: %s", esp_err_to_name(err));
+            }
+        }
         esp_err_t err = ui_status_set_brightness(DISPLAY_ACTIVE_BRIGHTNESS);
         if (err != ESP_OK) {
+            restored = false;
             ESP_LOGW(TAG, "restore brightness failed: %s", esp_err_to_name(err));
-        } else {
+        }
+        if (restored) {
+            s_display_off = false;
             s_display_dimmed = false;
             ui_status_set_idle_dimmed(false);
         }
     }
     restart_display_dim_timer();
+    restart_display_off_timer();
     restart_deep_sleep_timer();
 }
 
@@ -284,6 +334,18 @@ static void start_codex_done_timer(void)
 static void enter_deep_sleep(void)
 {
     if (s_recording || s_ota_updating || voice_ble_ota_is_active()) {
+        restart_deep_sleep_timer();
+        return;
+    }
+
+    const bool codex_active = s_app_ui_state == APP_UI_STATE_CODEX_WORKING ||
+                              s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED;
+    const uint64_t timeout_us = codex_active ? s_codex_deep_sleep_timeout_us
+                                             : s_idle_deep_sleep_timeout_us;
+    const int64_t now_us = esp_timer_get_time();
+    if (s_last_activity_us > 0 && now_us >= s_last_activity_us &&
+        (uint64_t)(now_us - s_last_activity_us) < timeout_us) {
+        ESP_LOGI(TAG, "skip stale deep sleep event after newer activity");
         restart_deep_sleep_timer();
         return;
     }
@@ -406,6 +468,7 @@ static uint32_t start_recording(void)
     s_recording = true;
     s_app_ui_state = APP_UI_STATE_RECORDING;
     restart_display_dim_timer();
+    restart_display_off_timer();
     restart_deep_sleep_timer();
     ui_status_set_recording(session_id);
     return session_id;
@@ -422,6 +485,7 @@ static uint32_t stop_recording(void)
     audio_pipeline_stop();
     release_recording_pm_locks();
     restart_display_dim_timer();
+    restart_display_off_timer();
     restart_deep_sleep_timer();
     return session_id;
 }
@@ -443,6 +507,24 @@ static void queue_app_event_with_ota(app_event_type_t type, uint32_t written, ui
     }
 }
 
+static void queue_power_timers_event(uint32_t dim_seconds, uint32_t screen_off_seconds,
+                                     uint32_t idle_sleep_seconds, uint32_t codex_sleep_seconds)
+{
+    if (!s_app_event_queue) {
+        return;
+    }
+    app_event_t event = {
+        .type = APP_EVENT_POWER_TIMERS,
+        .dim_seconds = dim_seconds,
+        .screen_off_seconds = screen_off_seconds,
+        .idle_sleep_seconds = idle_sleep_seconds,
+        .codex_sleep_seconds = codex_sleep_seconds,
+    };
+    if (xQueueSend(s_app_event_queue, &event, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "drop power timers: app queue full");
+    }
+}
+
 static void queue_app_event_from_isr(app_event_type_t type, BaseType_t *high_task_woken)
 {
     if (s_app_event_queue) {
@@ -455,7 +537,7 @@ static void queue_app_event_from_isr(app_event_type_t type, BaseType_t *high_tas
     }
 }
 
-static void queue_ui_state_event(const char *state, const char *text)
+static void queue_ui_state_event(const char *state, const char *text, bool notify_completion)
 {
     if (!s_app_event_queue) {
         ESP_LOGW(TAG, "drop ui_state state=%s text_len=%u: app queue unavailable",
@@ -466,6 +548,7 @@ static void queue_ui_state_event(const char *state, const char *text)
 
     app_event_t event = {
         .type = APP_EVENT_UI_STATE,
+        .notify_completion = notify_completion,
     };
     if (state) {
         strlcpy(event.state, state, sizeof(event.state));
@@ -517,6 +600,21 @@ static void ble_connection_cb(bool connected)
     queue_app_event(connected ? APP_EVENT_BLE_CONNECTED : APP_EVENT_BLE_DISCONNECTED);
 }
 
+static bool json_seconds_value(const cJSON *item, uint32_t min_seconds,
+                               uint32_t max_seconds, uint32_t *seconds)
+{
+    if (!cJSON_IsNumber(item) || item->valuedouble < min_seconds ||
+        item->valuedouble > max_seconds) {
+        return false;
+    }
+    const uint32_t value = (uint32_t)item->valuedouble;
+    if ((double)value != item->valuedouble) {
+        return false;
+    }
+    *seconds = value;
+    return true;
+}
+
 static void ble_control_cb(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
@@ -529,9 +627,17 @@ static void ble_control_cb(const char *json)
     const cJSON *state = cJSON_GetObjectItemCaseSensitive(root, "state");
     const cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
     const cJSON *mode = cJSON_GetObjectItemCaseSensitive(root, "mode");
+    const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(root, "enabled");
+    const cJSON *dim_seconds = cJSON_GetObjectItemCaseSensitive(root, "dim_seconds");
+    const cJSON *screen_off_seconds = cJSON_GetObjectItemCaseSensitive(root, "screen_off_seconds");
+    const cJSON *idle_sleep_seconds = cJSON_GetObjectItemCaseSensitive(root, "idle_sleep_seconds");
+    const cJSON *codex_sleep_seconds = cJSON_GetObjectItemCaseSensitive(root, "codex_sleep_seconds");
+    const cJSON *notify_completion = cJSON_GetObjectItemCaseSensitive(root, "notify_completion");
     if (cJSON_IsString(event) && strcmp(event->valuestring, "ui_state") == 0 &&
         cJSON_IsString(state)) {
-        queue_ui_state_event(state->valuestring, cJSON_IsString(text) ? text->valuestring : "");
+        queue_ui_state_event(state->valuestring,
+                             cJSON_IsString(text) ? text->valuestring : "",
+                             cJSON_IsTrue(notify_completion));
     } else if (cJSON_IsString(event) && strcmp(event->valuestring, "interaction_mode") == 0 &&
                cJSON_IsString(mode)) {
         if (strcmp(mode->valuestring, "click_to_talk") == 0) {
@@ -541,6 +647,27 @@ static void ble_control_cb(const char *json)
         } else {
             ESP_LOGW(TAG, "unknown interaction_mode %s", mode->valuestring);
         }
+    } else if (cJSON_IsString(event) &&
+               strcmp(event->valuestring, "codex_success_chime") == 0 &&
+               cJSON_IsBool(enabled)) {
+        s_codex_success_chime_enabled = cJSON_IsTrue(enabled);
+        ESP_LOGI(TAG, "Codex success chime %s",
+                 s_codex_success_chime_enabled ? "enabled" : "disabled");
+    } else if (cJSON_IsString(event) && strcmp(event->valuestring, "power_timers") == 0) {
+        uint32_t dim = 0;
+        uint32_t screen_off = 0;
+        uint32_t idle_sleep = 0;
+        uint32_t codex_sleep = 0;
+        if (json_seconds_value(dim_seconds, 5, 3600, &dim) &&
+            json_seconds_value(screen_off_seconds, 30, 86400, &screen_off) &&
+            json_seconds_value(idle_sleep_seconds, 60, 86400, &idle_sleep) &&
+            json_seconds_value(codex_sleep_seconds, 60, 86400, &codex_sleep)) {
+            queue_power_timers_event(dim, screen_off, idle_sleep, codex_sleep);
+        } else {
+            ESP_LOGW(TAG, "ignore invalid power timer settings");
+        }
+    } else if (cJSON_IsString(event) && strcmp(event->valuestring, "disconnect") == 0) {
+        queue_app_event(APP_EVENT_BLE_DISCONNECT_REQUEST);
     }
     cJSON_Delete(root);
 }
@@ -557,7 +684,7 @@ static uint32_t elapsed_button_ms(int64_t down_us)
     return (uint32_t)(elapsed_us / 1000);
 }
 
-static void apply_app_ui_state(const char *state, const char *text)
+static void apply_app_ui_state(const char *state, const char *text, bool notify_completion)
 {
     ESP_LOGI(TAG, "apply ui_state state=%s text_len=%u current=%s recording=%d",
              state ? state : "nil",
@@ -580,27 +707,42 @@ static void apply_app_ui_state(const char *state, const char *text)
         if (!s_recording) {
             ui_status_set_recording(0);
         }
+        note_activity();
     } else if (strcmp(state, "thinking") == 0) {
         s_app_ui_state = APP_UI_STATE_THINKING;
         ui_status_set_partial_text("");
+        note_activity();
     } else if (strcmp(state, "pending_confirmation") == 0) {
         s_app_ui_state = APP_UI_STATE_PENDING_CONFIRMATION;
         ui_status_set_pending_confirmation();
+        note_activity();
     } else if (strcmp(state, "codex_working") == 0) {
         s_app_ui_state = APP_UI_STATE_CODEX_WORKING;
         ui_status_set_codex_working();
+        note_activity();
     } else if (strcmp(state, "approval_needed") == 0) {
         s_app_ui_state = APP_UI_STATE_APPROVAL_NEEDED;
         ui_status_set_approval_needed();
+        note_activity();
     } else if (strcmp(state, "codex_done") == 0) {
         const esp_app_desc_t *app_desc = esp_app_get_description();
-        note_activity();
+        const bool completed_codex_work = notify_completion ||
+                                          s_app_ui_state == APP_UI_STATE_CODEX_WORKING ||
+                                          s_app_ui_state == APP_UI_STATE_APPROVAL_NEEDED;
         s_app_ui_state = APP_UI_STATE_CODEX_DONE;
+        note_activity();
         ui_status_set_codex_done(app_desc ? app_desc->version : NULL);
+        if (completed_codex_work && s_codex_success_chime_enabled) {
+            esp_err_t err = audio_pipeline_play_success_chime();
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "play success chime failed: %s", esp_err_to_name(err));
+            }
+        }
         start_codex_done_timer();
     } else if (strcmp(state, "error") == 0) {
         s_app_ui_state = APP_UI_STATE_ERROR;
         ui_status_set_error(text && text[0] ? text : "Unknown error");
+        note_activity();
     } else {
         ESP_LOGW(TAG, "unknown ui_state %s", state);
     }
@@ -658,7 +800,7 @@ static void app_event_task(void *arg)
                 esp_err_t primary_up_err = voice_ble_send_button_click("primary", primary_duration_ms,
                                                                        s_primary_session_id);
                 if (s_primary_session_id != 0 && primary_up_err != ESP_OK) {
-                    apply_app_ui_state("ready", "");
+                    apply_app_ui_state("ready", "", false);
                 }
                 s_primary_down_us = 0;
                 s_primary_session_id = 0;
@@ -681,7 +823,7 @@ static void app_event_task(void *arg)
                 if (s_primary_session_id != 0 && primary_down_err != ESP_OK) {
                     (void)stop_recording();
                     s_primary_session_id = 0;
-                    apply_app_ui_state("ready", "");
+                    apply_app_ui_state("ready", "", false);
                 }
             }
             break;
@@ -701,7 +843,7 @@ static void app_event_task(void *arg)
             esp_err_t primary_up_err = voice_ble_send_button_up("primary", primary_duration_ms,
                                                                 s_primary_session_id);
             if (s_primary_session_id != 0 && primary_up_err != ESP_OK) {
-                apply_app_ui_state("ready", "");
+                apply_app_ui_state("ready", "", false);
             }
             s_primary_down_us = 0;
             s_primary_session_id = 0;
@@ -718,7 +860,7 @@ static void app_event_task(void *arg)
             s_secondary_down_us = 0;
             break;
         case APP_EVENT_UI_STATE:
-            apply_app_ui_state(event.state, event.text);
+            apply_app_ui_state(event.state, event.text, event.notify_completion);
             break;
         case APP_EVENT_BLE_CONNECTED:
             stop_codex_done_timer();
@@ -736,6 +878,23 @@ static void app_event_task(void *arg)
             release_recording_pm_locks();
             release_ota_pm_locks();
             ui_status_set_pairing(voice_ble_device_name());
+            note_activity();
+            break;
+        case APP_EVENT_BLE_DISCONNECT_REQUEST:
+            (void)voice_ble_disconnect();
+            break;
+        case APP_EVENT_POWER_TIMERS:
+            s_display_dim_timeout_us = SECONDS_TO_US(event.dim_seconds);
+            s_display_off_timeout_us = SECONDS_TO_US(event.screen_off_seconds);
+            s_idle_deep_sleep_timeout_us = SECONDS_TO_US(event.idle_sleep_seconds);
+            s_codex_deep_sleep_timeout_us = SECONDS_TO_US(event.codex_sleep_seconds);
+            ESP_LOGI(TAG,
+                     "power timers dim=%us off=%us idle_sleep=%us codex_sleep=%us",
+                     (unsigned)event.dim_seconds,
+                     (unsigned)event.screen_off_seconds,
+                     (unsigned)event.idle_sleep_seconds,
+                     (unsigned)event.codex_sleep_seconds);
+            note_activity();
             break;
         case APP_EVENT_POWER_IRQ:
             gpio_intr_enable(STICK_S3_PIN_PMIC_IRQ);
@@ -781,14 +940,14 @@ static void app_event_task(void *arg)
             if (!s_recording && (s_app_ui_state == APP_UI_STATE_RECORDING ||
                                  s_app_ui_state == APP_UI_STATE_THINKING)) {
                 ESP_LOGW(TAG, "host response timeout, returning to ready");
-                apply_app_ui_state("ready", "");
+                apply_app_ui_state("ready", "", false);
             }
             break;
         case APP_EVENT_CODEX_DONE_TIMEOUT:
             if (!s_recording && !s_ota_updating &&
                 s_app_ui_state == APP_UI_STATE_CODEX_DONE) {
                 ESP_LOGI(TAG, "Codex done timeout, returning to ready");
-                apply_app_ui_state("ready", "");
+                apply_app_ui_state("ready", "", false);
             }
             break;
         }
@@ -853,16 +1012,40 @@ static void display_dim_timer_cb(void *arg)
 {
     (void)arg;
 
-    if (!s_display_dimmed && !s_recording && !s_ota_updating) {
+    if (!s_display_off && !s_display_dimmed && !s_recording && !s_ota_updating) {
         esp_err_t err = ui_status_set_brightness(DISPLAY_DIM_BRIGHTNESS);
         if (err == ESP_OK) {
             s_display_dimmed = true;
-            ui_status_set_idle_dimmed(true);
+            const bool resting = s_app_ui_state == APP_UI_STATE_READY &&
+                                 voice_ble_is_ready();
+            ui_status_set_idle_dimmed(resting);
             ESP_LOGI(TAG, "display dimmed after inactivity");
         } else {
             ESP_LOGW(TAG, "dim display failed: %s", esp_err_to_name(err));
         }
     }
+}
+
+static void display_off_timer_cb(void *arg)
+{
+    (void)arg;
+
+    if (s_display_off || s_recording || s_ota_updating) {
+        return;
+    }
+    (void)esp_timer_stop(s_display_dim_timer);
+    esp_err_t err = ui_status_set_brightness(0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "turn display backlight off failed: %s", esp_err_to_name(err));
+        return;
+    }
+    s_display_dimmed = true;
+    s_display_off = true;
+    err = ui_status_set_display_enabled(false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "turn display panel off failed: %s", esp_err_to_name(err));
+    }
+    ESP_LOGI(TAG, "display off after inactivity");
 }
 
 static esp_err_t init_display_dim_timer(void)
@@ -872,6 +1055,15 @@ static esp_err_t init_display_dim_timer(void)
         .name = "display_dim",
     };
     return esp_timer_create(&timer_args, &s_display_dim_timer);
+}
+
+static esp_err_t init_display_off_timer(void)
+{
+    const esp_timer_create_args_t timer_args = {
+        .callback = display_off_timer_cb,
+        .name = "display_off",
+    };
+    return esp_timer_create(&timer_args, &s_display_off_timer);
 }
 
 static void deep_sleep_timer_cb(void *arg)
@@ -1036,6 +1228,7 @@ void app_main(void)
     ESP_ERROR_CHECK(stick_s3_board_init());
     ESP_ERROR_CHECK(ui_status_init());
     ESP_ERROR_CHECK(init_display_dim_timer());
+    ESP_ERROR_CHECK(init_display_off_timer());
     ESP_ERROR_CHECK(init_deep_sleep_timer());
     ESP_ERROR_CHECK(init_host_response_timer());
     ESP_ERROR_CHECK(init_codex_done_timer());
