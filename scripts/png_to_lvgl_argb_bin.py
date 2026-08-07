@@ -31,7 +31,7 @@ def main() -> None:
         stem = re.sub(r"_\d+$", "", stem)
         if stem and stem[0].isdigit() and "_" in stem:
             stem = stem.split("_", 1)[1]
-        out_path = args.out_dir / f"cat_{stem}_argb8888.bin"
+        out_path = args.out_dir / f"xv_{stem}_argb8888.bin"
         write_lvgl_argb8888(source, out_path)
         print(out_path)
 
