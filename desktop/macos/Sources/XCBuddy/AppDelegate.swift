@@ -244,12 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureApplicationIcon() {
         if let image = Self.applicationIconImage() {
             NSApp.applicationIconImage = image
-            let imageView = NSImageView(frame: NSRect(x: 4, y: 4, width: 120, height: 120))
-            imageView.image = image
-            imageView.imageScaling = .scaleProportionallyUpOrDown
-            let dockView = NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
-            dockView.addSubview(imageView)
-            NSApp.dockTile.contentView = dockView
+            NSApp.dockTile.contentView = nil
             NSApp.dockTile.display()
         }
     }
