@@ -527,6 +527,14 @@ final class StatusController {
         overlay.showListening(text: text)
     }
 
+    func showProcessing(_ text: String, deviceID: String? = nil) {
+        setStatus(text)
+        let overlay = overlay(for: deviceID)
+        markOverlayVisible(for: deviceID)
+        applyOverlayStyle(for: deviceID, overlay: overlay)
+        overlay.showStatus(text)
+    }
+
     func showFinal(_ text: String, deviceID: String? = nil, onHidden: (() -> Void)? = nil) {
         setStatus(text.isEmpty ? "No speech" : "Ready")
         let overlay = overlay(for: deviceID)

@@ -634,7 +634,7 @@ final class XCBuddyCoordinator {
                 cancelShortRecording()
             } else if asrStarted {
                 debugAudioRecorder.finish()
-                statusController.setStatus("Processing")
+                statusController.showProcessing("Transcribing...", deviceID: activeDeviceID)
                 sendUIStateForActiveDevice("thinking")
             } else {
                 debugAudioRecorder.finish()
@@ -642,7 +642,7 @@ final class XCBuddyCoordinator {
                     finishWithASRError("Failed to start ASR")
                     return
                 }
-                statusController.setStatus("Processing")
+                statusController.showProcessing("Transcribing...", deviceID: activeDeviceID)
                 sendUIStateForActiveDevice("thinking")
             }
         }
@@ -764,6 +764,7 @@ final class XCBuddyCoordinator {
                 cancelSubtitleCycle(peripheralID: peripheralID, reason: "short_recording")
             } else if cycle.asrStarted {
                 cycle.debugAudioRecorder.finish()
+                statusController.showProcessing("Transcribing...", deviceID: cycle.deviceID)
                 finishSubtitleAudioInput(cycle)
             } else {
                 cycle.debugAudioRecorder.finish()
@@ -775,6 +776,7 @@ final class XCBuddyCoordinator {
                     )
                     return
                 }
+                statusController.showProcessing("Transcribing...", deviceID: cycle.deviceID)
                 finishSubtitleAudioInput(cycle)
             }
         }
@@ -826,6 +828,8 @@ final class XCBuddyCoordinator {
         cycle.debugAudioRecorder.append(finalChunk)
         cycle.debugAudioRecorder.finish()
         sendOrBufferSubtitleOggChunk(finalChunk, isLast: true, canStartASR: true, cycle: cycle)
+        guard cycle.asrStarted else { return }
+        statusController.showProcessing("Transcribing...", deviceID: cycle.deviceID)
     }
 
     private func finishSubtitleAudioInput(_ cycle: SubtitleCycle) {
@@ -895,7 +899,7 @@ final class XCBuddyCoordinator {
         debugAudioRecorder.append(finalChunk)
         debugAudioRecorder.finish()
         sendOrBufferOggChunk(finalChunk, isLast: true, canStartASR: true)
-        statusController.setStatus("Processing")
+        statusController.showProcessing("Transcribing...", deviceID: activeDeviceID)
         sendUIStateForActiveDevice("thinking")
     }
 
@@ -990,7 +994,7 @@ final class XCBuddyCoordinator {
 
         if profile.transform == .translate {
             pastedFinalText = true
-            statusController.setStatus("Translating")
+            statusController.showProcessing("Translating...", deviceID: activeDeviceID)
             transformText(text, profile: profile, deviceID: activeDeviceID) { [weak self] result in
                 guard let self else { return }
                 switch result {
