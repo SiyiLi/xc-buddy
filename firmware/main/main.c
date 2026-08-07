@@ -906,6 +906,11 @@ static void app_event_task(void *arg)
             ESP_LOGI(TAG, "button side up");
             note_activity();
             voice_ble_send_button_click("secondary", elapsed_button_ms(s_secondary_down_us), 0);
+            if (s_recording) {
+                (void)stop_recording();
+                s_primary_down_us = 0;
+                s_primary_session_id = 0;
+            }
             (void)voice_ble_request_slow_interval();
             s_secondary_down_us = 0;
             break;
