@@ -60,6 +60,8 @@ static button_handle_t s_front_button;
 static button_handle_t s_side_button;
 static int64_t s_primary_down_us;
 static int64_t s_secondary_down_us;
+static bool s_front_press_wake_only;
+static bool s_side_press_wake_only;
 static int64_t s_last_activity_us;
 static uint32_t s_primary_session_id;
 static uint64_t s_display_dim_timeout_us = SECONDS_TO_US(DEFAULT_DISPLAY_DIM_SECONDS);
@@ -841,7 +843,12 @@ static void app_event_task(void *arg)
         switch (event.type) {
         case APP_EVENT_FRONT_DOWN:
             ESP_LOGI(TAG, "button front down");
+            s_front_press_wake_only = s_display_off;
             note_activity();
+            if (s_front_press_wake_only) {
+                ESP_LOGI(TAG, "button front down consumed to wake display");
+                break;
+            }
             if (s_interaction_mode == INTERACTION_MODE_CLICK_TO_TALK && s_recording) {
                 const uint32_t primary_duration_ms = elapsed_button_ms(s_primary_down_us);
                 s_primary_session_id = stop_recording();
@@ -878,6 +885,10 @@ static void app_event_task(void *arg)
         case APP_EVENT_FRONT_UP:
             ESP_LOGI(TAG, "button front up");
             note_activity();
+            if (s_front_press_wake_only) {
+                s_front_press_wake_only = false;
+                break;
+            }
             if (s_interaction_mode == INTERACTION_MODE_CLICK_TO_TALK) {
                 break;
             }
@@ -898,13 +909,22 @@ static void app_event_task(void *arg)
             break;
         case APP_EVENT_SIDE_DOWN:
             ESP_LOGI(TAG, "button side down");
+            s_side_press_wake_only = s_display_off;
             note_activity();
+            if (s_side_press_wake_only) {
+                ESP_LOGI(TAG, "button side down consumed to wake display");
+                break;
+            }
             (void)voice_ble_request_fast_interval();
             s_secondary_down_us = esp_timer_get_time();
             break;
         case APP_EVENT_SIDE_UP:
             ESP_LOGI(TAG, "button side up");
             note_activity();
+            if (s_side_press_wake_only) {
+                s_side_press_wake_only = false;
+                break;
+            }
             voice_ble_send_button_click("secondary", elapsed_button_ms(s_secondary_down_us), 0);
             if (s_recording) {
                 (void)stop_recording();
