@@ -502,6 +502,20 @@ static uint32_t stop_recording(void)
     return session_id;
 }
 
+static void cancel_recording(void)
+{
+    if (!s_recording) {
+        return;
+    }
+
+    s_recording = false;
+    (void)audio_pipeline_cancel();
+    release_recording_pm_locks();
+    restart_display_dim_timer();
+    restart_display_off_timer();
+    restart_deep_sleep_timer();
+}
+
 static void queue_app_event(app_event_type_t type)
 {
     queue_app_event_with_ota(type, 0, 0);
@@ -925,11 +939,18 @@ static void app_event_task(void *arg)
                 s_side_press_wake_only = false;
                 break;
             }
-            voice_ble_send_button_click("secondary", elapsed_button_ms(s_secondary_down_us), 0);
             if (s_recording) {
-                (void)stop_recording();
+                cancel_recording();
                 s_primary_down_us = 0;
                 s_primary_session_id = 0;
+                s_app_ui_state = APP_UI_STATE_READY;
+                ui_status_set_idle();
+            }
+            esp_err_t secondary_click_err = voice_ble_send_button_click(
+                "secondary", elapsed_button_ms(s_secondary_down_us), 0);
+            if (secondary_click_err != ESP_OK) {
+                ESP_LOGW(TAG, "secondary button click send failed: %s",
+                         esp_err_to_name(secondary_click_err));
             }
             (void)voice_ble_request_slow_interval();
             s_secondary_down_us = 0;

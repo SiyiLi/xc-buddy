@@ -53,6 +53,7 @@ typedef struct {
 
 static atomic_bool s_running;
 static atomic_bool s_recording_requested;
+static atomic_bool s_cancel_requested;
 static atomic_bool s_chime_running;
 static atomic_bool s_chime_cancel;
 static bool s_initialized;
@@ -476,16 +477,25 @@ static void tx_task(void *arg)
 
         /* Sentinel: END flag with no payload signals drain mode */
         if (pkt.flags == VOICE_BLE_FLAG_END && pkt.len == 0) {
+            if (atomic_exchange(&s_cancel_requested, false)) {
+                goto cancel;
+            }
             goto drain;
         }
 
         int retries = 0;
         while (true) {
+            if (atomic_load(&s_cancel_requested)) {
+                goto cancel;
+            }
             esp_err_t err = voice_ble_send_audio(pkt.session_id, pkt.seq,
                                                  pkt.flags, pkt.data, pkt.len);
             if (err == ESP_OK) {
                 sent++;
                 break;
+            }
+            if (atomic_load(&s_cancel_requested)) {
+                goto cancel;
             }
             retries++;
             if (retries >= TX_MAX_RETRIES) {
@@ -538,16 +548,25 @@ drain:
         voice_ble_send_audio(s_session_id, s_seq, VOICE_BLE_FLAG_END, NULL, 0);
 
         ESP_LOGI(TAG, "tx task exit: sent=%" PRIu32 " dropped=%" PRIu32, sent, tx_dropped);
-
-        /* Wait for audio_task to finish before destroying shared resources */
-        while (s_audio_task != NULL) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        deinit_session_resources();
-        s_tx_task = NULL;
-        xSemaphoreGive(s_audio_resource_gate);
-        vTaskDelete(NULL);
     }
+
+    goto cleanup;
+
+cancel:
+    atomic_store(&s_cancel_requested, false);
+    xQueueReset(s_tx_queue);
+    ESP_LOGI(TAG, "tx task cancelled: sent=%" PRIu32 " dropped=%" PRIu32,
+             sent, tx_dropped);
+
+cleanup:
+    /* Wait for audio_task to finish before destroying shared resources */
+    while (s_audio_task != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    deinit_session_resources();
+    s_tx_task = NULL;
+    xSemaphoreGive(s_audio_resource_gate);
+    vTaskDelete(NULL);
 }
 
 esp_err_t audio_pipeline_init(void)
@@ -627,6 +646,7 @@ esp_err_t audio_pipeline_start(uint32_t session_id)
     xQueueReset(s_tx_queue);
     s_session_id = session_id;
     s_seq = 0;
+    atomic_store(&s_cancel_requested, false);
     opus_encoder_ctl(s_opus_encoder, OPUS_RESET_STATE);
     atomic_store(&s_running, true);
 
@@ -680,6 +700,27 @@ esp_err_t audio_pipeline_stop(void)
     };
     xQueueSend(s_tx_queue, &sentinel, portMAX_DELAY);
     return ESP_OK;
+}
+
+esp_err_t audio_pipeline_cancel(void)
+{
+    if (!atomic_load(&s_running)) {
+        return ESP_OK;
+    }
+    atomic_store(&s_cancel_requested, true);
+    atomic_store(&s_running, false);
+    ESP_LOGI(TAG, "cancel session %" PRIu32, s_session_id);
+
+    xQueueReset(s_tx_queue);
+    audio_packet_t sentinel = {
+        .session_id = s_session_id,
+        .seq = s_seq,
+        .flags = VOICE_BLE_FLAG_END,
+        .len = 0,
+    };
+    return xQueueSendToFront(s_tx_queue, &sentinel, 0) == pdTRUE
+        ? ESP_OK
+        : ESP_FAIL;
 }
 
 esp_err_t audio_pipeline_play_success_chime(void)

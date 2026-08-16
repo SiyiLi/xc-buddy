@@ -13,6 +13,7 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
@@ -29,6 +30,7 @@
 static const char *TAG = "voice_ble";
 
 #define OTA_PROGRESS_NOTIFY_BYTES (32 * 1024)
+#define AUDIO_NOTIFY_TIMEOUT_MS 250
 
 static bool s_connected;
 static bool s_audio_subscribed;
@@ -44,6 +46,8 @@ static char s_device_name[8] = VOICE_BLE_DEVICE_NAME_PREFIX "-0000";
 static voice_ble_connection_cb_t s_connection_cb;
 static voice_ble_control_cb_t s_control_cb;
 static voice_ble_ota_cb_t s_ota_cb;
+/* Prevent audio from queueing ahead of latency-sensitive state notifications. */
+static SemaphoreHandle_t s_audio_notify_gate;
 
 typedef enum {
     CONN_ITVL_NONE,
@@ -538,6 +542,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_itvl_target = CONN_ITVL_NONE;
         s_itvl_update_pending = false;
+        xSemaphoreGive(s_audio_notify_gate);
         start_advertising();
         if (s_connection_cb) {
             s_connection_cb(false);
@@ -576,6 +581,13 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         }
         return 0;
     }
+
+    case BLE_GAP_EVENT_NOTIFY_TX:
+        if (!event->notify_tx.indication &&
+            event->notify_tx.attr_handle == s_audio_attr_handle) {
+            xSemaphoreGive(s_audio_notify_gate);
+        }
+        return 0;
 
     case BLE_GAP_EVENT_CONN_UPDATE: {
         struct ble_gap_conn_desc desc;
@@ -717,6 +729,11 @@ esp_err_t voice_ble_init(void)
 {
     ESP_RETURN_ON_ERROR(init_device_identity(), TAG, "device identity init failed");
 
+    s_audio_notify_gate = xSemaphoreCreateBinary();
+    ESP_RETURN_ON_FALSE(s_audio_notify_gate != NULL, ESP_ERR_NO_MEM, TAG,
+                        "audio notify gate allocation failed");
+    xSemaphoreGive(s_audio_notify_gate);
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -816,6 +833,10 @@ esp_err_t voice_ble_send_audio(uint32_t session_id, uint32_t seq, uint8_t flags,
     if (len > UINT16_MAX) {
         return ESP_ERR_INVALID_SIZE;
     }
+    if (xSemaphoreTake(s_audio_notify_gate,
+                       pdMS_TO_TICKS(AUDIO_NOTIFY_TIMEOUT_MS)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
 
     uint8_t header[16] = {
         1,
@@ -838,6 +859,7 @@ esp_err_t voice_ble_send_audio(uint32_t session_id, uint32_t seq, uint8_t flags,
 
     struct os_mbuf *om = ble_hs_mbuf_from_flat(header, sizeof(header));
     if (!om) {
+        xSemaphoreGive(s_audio_notify_gate);
         ESP_LOGW(TAG, "tx seq=%" PRIu32 " mbuf alloc failed", seq);
         return ESP_ERR_NO_MEM;
     }
@@ -846,6 +868,7 @@ esp_err_t voice_ble_send_audio(uint32_t session_id, uint32_t seq, uint8_t flags,
         int rc = os_mbuf_append(om, opus_payload, len);
         if (rc != 0) {
             os_mbuf_free_chain(om);
+            xSemaphoreGive(s_audio_notify_gate);
             ESP_LOGW(TAG, "tx seq=%" PRIu32 " mbuf append failed rc=%d", seq, rc);
             return ESP_FAIL;
         }
@@ -853,6 +876,7 @@ esp_err_t voice_ble_send_audio(uint32_t session_id, uint32_t seq, uint8_t flags,
 
     int rc = ble_gatts_notify_custom(s_conn_handle, s_audio_attr_handle, om);
     if (rc != 0) {
+        xSemaphoreGive(s_audio_notify_gate);
         ESP_LOGW(TAG, "tx seq=%" PRIu32 " notify failed rc=%d", seq, rc);
         return ESP_FAIL;
     }

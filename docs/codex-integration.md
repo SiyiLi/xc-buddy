@@ -11,8 +11,10 @@ sessions in every folder:
 
 The installer copies the lifecycle helper to `~/.codex/hooks/`, then merges XC
 Buddy's event handlers into `~/.codex/hooks.json` without replacing unrelated
-global hooks. Running it again updates the installed helper and XC Buddy
-handlers. The global hooks map:
+global hooks. It reuses `codex_bridge_token` from XC Buddy's application config
+and removes an older XC Buddy `notify = [...]` entry to avoid duplicate events.
+Running it again updates the installed helper and XC Buddy handlers. The global
+hooks map:
 
 - `UserPromptSubmit` -> Working
 - `PermissionRequest` -> Approval needed
@@ -20,9 +22,8 @@ handlers. The global hooks map:
 - `Stop` -> Idle and `Codex done`
 - `SessionEnd` -> Idle and `Codex done` as a process-exit fallback
 
-Remove an older XC Buddy `notify = [...]` entry from `~/.codex/config.toml` and
-any repository-local XC Buddy `.codex/hooks.json`; Codex runs all matching hook
-sources, so leaving either one enabled causes duplicate completion events.
+Remove any repository-local XC Buddy `.codex/hooks.json`; Codex runs all
+matching hook sources, so leaving it enabled causes duplicate completion events.
 
 Start a new Codex session in any folder, open `/hooks`, and review and trust the
 user-level XC Buddy hook definitions. Codex records trust against the exact hook
