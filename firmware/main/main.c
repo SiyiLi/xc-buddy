@@ -929,7 +929,6 @@ static void app_event_task(void *arg)
                 ESP_LOGI(TAG, "button side down consumed to wake display");
                 break;
             }
-            (void)voice_ble_request_fast_interval();
             s_secondary_down_us = esp_timer_get_time();
             break;
         case APP_EVENT_SIDE_UP:
@@ -939,7 +938,8 @@ static void app_event_task(void *arg)
                 s_side_press_wake_only = false;
                 break;
             }
-            if (s_recording) {
+            const bool cancelled_recording = s_recording;
+            if (cancelled_recording) {
                 cancel_recording();
                 s_primary_down_us = 0;
                 s_primary_session_id = 0;
@@ -951,8 +951,11 @@ static void app_event_task(void *arg)
             if (secondary_click_err != ESP_OK) {
                 ESP_LOGW(TAG, "secondary button click send failed: %s",
                          esp_err_to_name(secondary_click_err));
+                if (cancelled_recording) {
+                    ESP_LOGW(TAG, "disconnecting BLE to resynchronize canceled recording");
+                    (void)voice_ble_disconnect();
+                }
             }
-            (void)voice_ble_request_slow_interval();
             s_secondary_down_us = 0;
             break;
         case APP_EVENT_UI_STATE:

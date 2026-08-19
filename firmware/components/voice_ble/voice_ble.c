@@ -923,7 +923,7 @@ esp_err_t voice_ble_request_slow_interval(void)
     s_itvl_target = CONN_ITVL_SLOW;
     struct ble_gap_upd_params params = {
         .itvl_min = 40,   // 50ms
-        .itvl_max = 160,  // 200ms
+        .itvl_max = 80,   // 100ms
         .latency = 4,
         .supervision_timeout = 500,  // 5s
         .min_ce_len = 0,
@@ -940,7 +940,7 @@ esp_err_t voice_ble_request_slow_interval(void)
         return ESP_FAIL;
     }
     s_itvl_update_pending = false;
-    ESP_LOGI(TAG, "requested slow conn interval 50-200ms");
+    ESP_LOGI(TAG, "requested slow conn interval 50-100ms");
     return ESP_OK;
 }
 

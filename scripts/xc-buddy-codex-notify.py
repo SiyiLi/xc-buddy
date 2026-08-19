@@ -7,6 +7,11 @@ import sys
 import urllib.request
 
 
+# The bridge is always a loopback request. Ignore process and system proxy
+# settings so localhost delivery cannot be diverted through an HTTP proxy.
+DIRECT_HTTP_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def read_event() -> dict:
     if len(sys.argv) > 1:
         return json.loads(sys.argv[1])
@@ -58,7 +63,7 @@ def main() -> int:
         token = os.environ.get("XC_BUDDY_CODEX_TOKEN", "")
         if token:
             request.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(request, timeout=0.5):
+        with DIRECT_HTTP_OPENER.open(request, timeout=0.5):
             pass
     except Exception:
         pass
