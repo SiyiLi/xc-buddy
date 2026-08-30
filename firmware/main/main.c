@@ -123,6 +123,8 @@ typedef enum {
     APP_EVENT_BLE_DISCONNECTED,
     APP_EVENT_BLE_DISCONNECT_REQUEST,
     APP_EVENT_POWER_TIMERS,
+    APP_EVENT_DISPLAY_DIM,
+    APP_EVENT_DISPLAY_OFF,
     APP_EVENT_POWER_IRQ,
     APP_EVENT_BATTERY_REFRESH,
     APP_EVENT_ENTER_DEEP_SLEEP,
@@ -157,6 +159,8 @@ static void queue_power_timers_event(uint32_t dim_seconds, uint32_t screen_off_s
 static void queue_ui_state_event(const char *state, const char *background_state,
                                  const char *text, bool notify_completion);
 static void apply_interaction_mode(interaction_mode_t mode);
+static void handle_display_dim_timeout(void);
+static void handle_display_off_timeout(void);
 
 static bool is_external_powered(void)
 {
@@ -1001,6 +1005,12 @@ static void app_event_task(void *arg)
                      (unsigned)event.codex_sleep_seconds);
             note_activity();
             break;
+        case APP_EVENT_DISPLAY_DIM:
+            handle_display_dim_timeout();
+            break;
+        case APP_EVENT_DISPLAY_OFF:
+            handle_display_off_timeout();
+            break;
         case APP_EVENT_POWER_IRQ:
             gpio_intr_enable(STICK_S3_PIN_PMIC_IRQ);
             /* fall through */
@@ -1122,10 +1132,19 @@ static esp_err_t init_buttons(void)
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-static void display_dim_timer_cb(void *arg)
+static bool display_timeout_is_stale(uint64_t timeout_us)
 {
-    (void)arg;
+    const int64_t now_us = esp_timer_get_time();
+    return s_last_activity_us > 0 && now_us >= s_last_activity_us &&
+           (uint64_t)(now_us - s_last_activity_us) < timeout_us;
+}
 
+static void handle_display_dim_timeout(void)
+{
+    if (display_timeout_is_stale(s_display_dim_timeout_us)) {
+        ESP_LOGI(TAG, "skip stale display dim event after newer activity");
+        return;
+    }
     if (!s_display_off && !s_display_dimmed && !s_recording && !s_ota_updating) {
         esp_err_t err = ui_status_set_brightness(DISPLAY_DIM_BRIGHTNESS);
         if (err == ESP_OK) {
@@ -1152,10 +1171,12 @@ static void display_dim_timer_cb(void *arg)
     }
 }
 
-static void display_off_timer_cb(void *arg)
+static void handle_display_off_timeout(void)
 {
-    (void)arg;
-
+    if (display_timeout_is_stale(s_display_off_timeout_us)) {
+        ESP_LOGI(TAG, "skip stale display off event after newer activity");
+        return;
+    }
     if (s_display_off || s_recording || s_ota_updating) {
         return;
     }
@@ -1170,8 +1191,21 @@ static void display_off_timer_cb(void *arg)
     err = ui_status_set_display_enabled(false);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "turn display panel off failed: %s", esp_err_to_name(err));
+        return;
     }
     ESP_LOGI(TAG, "display off after inactivity");
+}
+
+static void display_dim_timer_cb(void *arg)
+{
+    (void)arg;
+    queue_app_event(APP_EVENT_DISPLAY_DIM);
+}
+
+static void display_off_timer_cb(void *arg)
+{
+    (void)arg;
+    queue_app_event(APP_EVENT_DISPLAY_OFF);
 }
 
 static esp_err_t init_display_dim_timer(void)
