@@ -138,7 +138,9 @@ final class XCBuddyCoordinator {
     private let firmwareReleaseClient = FirmwareReleaseClient()
     private var debugAudioRecorder: DebugAudioRecorder
     private var codexReceiver: CodexEventReceiver?
+    private let relayClient = RelayClient()
     private var codexActivityState = CodexActivityState.idle
+    private var appliedRelayMode: RelayMode = .disabled
     private let minimumRecordingDuration: TimeInterval = 0.5
     private let audioEndTimeout: TimeInterval = 1.0
     private let approvalTimeout: TimeInterval = 60.0
@@ -164,6 +166,7 @@ final class XCBuddyCoordinator {
     private var firmwareReleaseRefreshTimer: Timer?
     private var errorRecoveryToken = 0
     private var isShowingASRError = false
+    private var isBLEActive = false
     private var subtitleCycles: [SubtitleCycleKey: SubtitleCycle] = [:]
     private var activeSubtitleSessions: [UUID: UInt32] = [:]
 
@@ -178,6 +181,7 @@ final class XCBuddyCoordinator {
             enabled: config.debugAudioCache,
             directory: config.debugAudioDirectory
         )
+        configureRelayCallbacks()
     }
 
     func start() {
@@ -206,8 +210,7 @@ final class XCBuddyCoordinator {
         }
 
         configureASRCallbacks()
-        startCodexBridge()
-        ble.start()
+        applyRelayMode()
         checkFirmwareUpdatesIfNeeded(force: false)
         startFirmwareReleaseRefreshTimer()
     }
@@ -216,7 +219,8 @@ final class XCBuddyCoordinator {
         cancelApprovalTimeout()
         codexReceiver?.stop()
         codexReceiver = nil
-        ble.stop()
+        relayClient.stop()
+        stopBLE()
     }
 
     func updateDeviceThemeColors(_ colors: [String: OverlayThemeColor]) {
@@ -234,6 +238,10 @@ final class XCBuddyCoordinator {
     func updateConfig(_ config: AppConfig) {
         let bridgeChanged = self.config.codexBridgePort != config.codexBridgePort ||
             self.config.codexBridgeToken != config.codexBridgeToken
+        let relayChanged = self.config.relayMode != config.relayMode ||
+            self.config.relayURL != config.relayURL ||
+            self.config.relaySenderToken != config.relaySenderToken ||
+            self.config.relayReceiverToken != config.relayReceiverToken
         let wasRecognizing = asrStarted || mainInputState.isBusy || isWaitingForFinalText || !subtitleCycles.isEmpty
         if wasRecognizing {
             asr.onPartial = nil
@@ -268,7 +276,12 @@ final class XCBuddyCoordinator {
         translator = LLMTranslationClient(config: config)
         configureASRCallbacks()
         statusController.setTranscriptionProvider("NVIDIA Inference")
-        if bridgeChanged { startCodexBridge() }
+        if bridgeChanged, config.relayMode != .receiver { startCodexBridge() }
+
+        statusController.setRelayMode(config.relayMode)
+        if relayChanged {
+            applyRelayMode()
+        }
 
         if pairedDeviceIDs != config.pairedDeviceIDs {
             updatePairedDeviceIDs(config.pairedDeviceIDs)
@@ -277,6 +290,139 @@ final class XCBuddyCoordinator {
         } else if wasRecognizing {
             statusController.setStatus("Ready")
         }
+    }
+
+    private func configureRelayCallbacks() {
+        relayClient.onConnectionStatus = { [weak self] status in
+            self?.statusController.setRelayStatus(status)
+        }
+        relayClient.onConnectionLost = { [weak self] mode in
+            guard let self, mode == .receiver, self.config.relayMode == .receiver else { return }
+            self.handleCodexLifecycleEvent(.idle)
+        }
+        relayClient.onMessage = { [weak self] message in
+            guard let self, self.config.relayMode == .receiver else { return }
+            self.handleCodexLifecycleEvent(message.lifecycleEvent)
+        }
+    }
+
+    private func applyRelayMode() {
+        let previousMode = appliedRelayMode
+        appliedRelayMode = config.relayMode
+        statusController.setRelayMode(config.relayMode)
+
+        switch config.relayMode {
+        case .disabled:
+            startBLE()
+            relayClient.stop()
+            statusController.setRelayStatus("Disabled")
+            if previousMode == .receiver {
+                codexActivityState = .idle
+            }
+            if codexReceiver == nil {
+                startCodexBridge()
+            }
+            handleCodexLifecycleEvent(lifecycleEvent(for: codexActivityState))
+        case .sender:
+            cancelApprovalTimeout()
+            stopBLE()
+            if codexReceiver == nil {
+                startCodexBridge()
+            }
+            if previousMode == .receiver {
+                codexActivityState = .idle
+            }
+            relayClient.retainSenderState(relayState(for: codexActivityState))
+            relayClient.start(
+                mode: .sender,
+                endpoint: config.relayURL,
+                token: config.relaySenderToken
+            )
+        case .receiver:
+            startBLE()
+            cancelApprovalTimeout()
+            codexReceiver?.stop()
+            codexReceiver = nil
+            handleCodexLifecycleEvent(.idle)
+            relayClient.start(
+                mode: .receiver,
+                endpoint: config.relayURL,
+                token: config.relayReceiverToken
+            )
+        }
+    }
+
+    private func startBLE() {
+        guard !isBLEActive else { return }
+        isBLEActive = true
+        ble.start()
+    }
+
+    private func stopBLE() {
+        guard isBLEActive else { return }
+        isBLEActive = false
+        ble.stop()
+    }
+
+    private func relayState(for state: CodexActivityState) -> RelayState {
+        switch state {
+        case .idle:
+            return .idle
+        case .working:
+            return .working
+        case .approvalNeeded:
+            return .approvalNeeded
+        }
+    }
+
+    private func lifecycleEvent(for state: CodexActivityState) -> CodexLifecycleEvent {
+        switch state {
+        case .idle:
+            return .idle
+        case .working:
+            return .working
+        case .approvalNeeded:
+            return .approvalNeeded
+        }
+    }
+
+    private func handleCodexLifecycleEvent(_ event: CodexLifecycleEvent) {
+        cancelApprovalTimeout()
+        switch event {
+        case .idle:
+            codexActivityState = .idle
+            statusController.setStatus("Ready")
+            statusController.setCodexBridgeStatus("Idle")
+            sendReadyUIState(to: nil)
+        case .working:
+            applyCodexWorkingState()
+        case .toolCallStarted:
+            guard codexActivityState != .working else { return }
+            applyCodexWorkingState()
+        case .approvalNeeded:
+            codexActivityState = .approvalNeeded
+            statusController.setStatus("Approval needed")
+            statusController.setCodexBridgeStatus("Approval needed")
+            ble.sendUIState("approval_needed", text: "Approval needed")
+            startApprovalTimeout()
+        case .done:
+            codexActivityState = .idle
+            statusController.setStatus("Ready")
+            statusController.setCodexBridgeStatus("Idle")
+            ble.sendTransientUIState("codex_done", text: "Turn complete")
+        case .error(let message):
+            codexActivityState = .idle
+            statusController.setStatus("Codex error")
+            statusController.setCodexBridgeStatus("Error")
+            ble.sendTransientUIState("error", text: message)
+        }
+    }
+
+    private func applyCodexWorkingState() {
+        codexActivityState = .working
+        statusController.setStatus("Codex working")
+        statusController.setCodexBridgeStatus("Working")
+        ble.sendUIState("codex_working", text: "Codex is working")
     }
 
     private func startCodexBridge() {
@@ -290,43 +436,40 @@ final class XCBuddyCoordinator {
             )
         }
         receiver.onEvent = { [weak self] event in
-            guard let self else { return }
-            switch event {
-            case .working:
-                self.cancelApprovalTimeout()
-                self.codexActivityState = .working
-                self.statusController.setStatus("Codex working")
-                self.statusController.setCodexBridgeStatus("Working")
-                self.ble.sendUIState("codex_working", text: "Codex is working")
-            case .approvalNeeded:
-                self.startApprovalTimeout()
-                self.codexActivityState = .approvalNeeded
-                self.statusController.setStatus("Approval needed")
-                self.statusController.setCodexBridgeStatus("Approval needed")
-                self.ble.sendUIState("approval_needed", text: "Approval needed")
-            case .toolCallStarted:
-                self.cancelApprovalTimeout()
-                guard self.codexActivityState != .working else { return }
-                self.codexActivityState = .working
-                self.statusController.setStatus("Codex working")
-                self.statusController.setCodexBridgeStatus("Working")
-                self.ble.sendUIState("codex_working", text: "Codex is working")
-            case .done:
-                self.cancelApprovalTimeout()
-                self.codexActivityState = .idle
-                self.statusController.setStatus("Ready")
-                self.statusController.setCodexBridgeStatus("Idle")
-                self.ble.sendUIState("codex_done", text: "Turn complete")
-            case .error(let message):
-                self.cancelApprovalTimeout()
-                self.codexActivityState = .idle
-                self.statusController.setStatus("Codex error")
-                self.statusController.setCodexBridgeStatus("Error")
-                self.ble.sendUIState("error", text: message)
-            }
+            self?.routeLocalCodexEvent(event)
         }
         codexReceiver = receiver
         receiver.start()
+    }
+
+    private func routeLocalCodexEvent(_ event: CodexLifecycleEvent) {
+        if config.relayMode == .sender {
+            trackSenderLifecycleEvent(event)
+            relayClient.publishSenderLifecycleEvent(event)
+            return
+        }
+        handleCodexLifecycleEvent(event)
+    }
+
+    private func trackSenderLifecycleEvent(_ event: CodexLifecycleEvent) {
+        switch event {
+        case .idle, .done:
+            codexActivityState = .idle
+            statusController.setStatus("Ready")
+            statusController.setCodexBridgeStatus("Idle")
+        case .working, .toolCallStarted:
+            codexActivityState = .working
+            statusController.setStatus("Codex working")
+            statusController.setCodexBridgeStatus("Working")
+        case .approvalNeeded:
+            codexActivityState = .approvalNeeded
+            statusController.setStatus("Approval needed")
+            statusController.setCodexBridgeStatus("Approval needed")
+        case .error:
+            codexActivityState = .idle
+            statusController.setStatus("Codex error")
+            statusController.setCodexBridgeStatus("Error")
+        }
     }
 
     private func startApprovalTimeout() {
@@ -1267,14 +1410,9 @@ final class XCBuddyCoordinator {
         finishRecognitionCycle()
         mainInputState = .ready
         if submittedToCodex {
-            cancelApprovalTimeout()
-            codexActivityState = .working
-            statusController.setStatus("Codex working")
-            statusController.setCodexBridgeStatus("Working")
-            sendUIStateForActiveDevice("codex_working", text: "Codex is working")
+            routeLocalCodexEvent(.working)
         } else {
-            statusController.setStatus("Ready")
-            sendUIStateForActiveDevice("ready")
+            routeLocalCodexEvent(.idle)
         }
         inputInjector.paste(text: text, pressEnter: shouldPressEnter)
     }
@@ -1368,6 +1506,7 @@ final class XCBuddyCoordinator {
     }
 
     private func restoreCodexActivityState(to peripheralID: UUID) {
+        guard config.relayMode != .sender else { return }
         switch codexActivityState {
         case .idle:
             statusController.setStatus("Ready")

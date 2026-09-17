@@ -104,8 +104,7 @@ enum BleProtocol {
     }
 
     static func uiStatePayload(state: String, text: String,
-                               backgroundState: String? = nil,
-                               notifyCompletion: Bool = false) -> Data {
+                               backgroundState: String? = nil) -> Data {
         var payload: [String: Any] = [
             "event": "ui_state",
             "state": state,
@@ -113,9 +112,6 @@ enum BleProtocol {
         ]
         if let backgroundState {
             payload["background_state"] = backgroundState
-        }
-        if notifyCompletion {
-            payload["notify_completion"] = true
         }
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }

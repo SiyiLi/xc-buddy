@@ -23,6 +23,9 @@ final class SettingsWindowController: NSWindowController {
     private let displayOffMinutesField = NSTextField()
     private let idleSleepMinutesField = NSTextField()
     private let codexSleepMinutesField = NSTextField()
+    private let relayURLField = NSTextField()
+    private let relaySenderTokenField = NSSecureTextField()
+    private let relayReceiverTokenField = NSSecureTextField()
     var onConfigChanged: ((AppConfig) -> Void)?
 
     private var config: AppConfig
@@ -30,7 +33,7 @@ final class SettingsWindowController: NSWindowController {
     init(config: AppConfig = AppConfig.load()) {
         self.config = config
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 640),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -58,54 +61,55 @@ final class SettingsWindowController: NSWindowController {
     private func buildContent() {
         guard let contentView = window?.contentView else { return }
 
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 16
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stack)
+        let root = settingsStack()
+        root.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(root)
 
-        stack.addArrangedSubview(sectionTitle("NVIDIA Transcription"))
-        stack.addArrangedSubview(row(label: "API Key", control: apiKeyField))
-        stack.addArrangedSubview(row(label: "Base URL", control: openAIBaseURLField))
-        stack.addArrangedSubview(row(label: "Model", control: openAIModelField))
-        stack.addArrangedSubview(row(label: "Prompt", control: openAIPromptField))
-        configureHotwordsTextView()
-        stack.addArrangedSubview(row(label: "Hotwords", control: hotwordsScrollView))
-        stack.addArrangedSubview(hintRow("Separate hotwords with commas or new lines."))
+        let tabView = NSTabView()
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        tabView.addTabViewItem(makeTab(title: "AI Services") { stack in
+            stack.addArrangedSubview(self.sectionTitle("NVIDIA Transcription"))
+            stack.addArrangedSubview(self.row(label: "API Key", control: self.apiKeyField))
+            stack.addArrangedSubview(self.row(label: "Base URL", control: self.openAIBaseURLField))
+            stack.addArrangedSubview(self.row(label: "Model", control: self.openAIModelField))
+            stack.addArrangedSubview(self.row(label: "Prompt", control: self.openAIPromptField))
+            self.configureHotwordsTextView()
+            stack.addArrangedSubview(self.row(label: "Hotwords", control: self.hotwordsScrollView))
+            stack.addArrangedSubview(self.hintRow("Separate hotwords with commas or new lines."))
 
-        stack.addArrangedSubview(sectionTitle("LLM"))
-        stack.addArrangedSubview(row(label: "Base URL", control: llmBaseURLField))
-        stack.addArrangedSubview(row(label: "API Key", control: llmAPIKeyField))
-        stack.addArrangedSubview(row(label: "Model", control: llmModelField))
+            stack.addArrangedSubview(self.sectionTitle("LLM"))
+            stack.addArrangedSubview(self.row(label: "Base URL", control: self.llmBaseURLField))
+            stack.addArrangedSubview(self.row(label: "API Key", control: self.llmAPIKeyField))
+            stack.addArrangedSubview(self.row(label: "Model", control: self.llmModelField))
+        })
+        tabView.addTabViewItem(makeTab(title: "Codex & Relay") { stack in
+            stack.addArrangedSubview(self.sectionTitle("Codex Bridge (Loopback Only)"))
+            stack.addArrangedSubview(self.row(label: "Port", control: self.codexBridgePortField))
+            stack.addArrangedSubview(self.row(label: "Codex Chimes", control: self.codexSuccessChimeButton))
 
-        stack.addArrangedSubview(sectionTitle("Codex Bridge (Loopback Only)"))
-        stack.addArrangedSubview(row(label: "Port", control: codexBridgePortField))
-        stack.addArrangedSubview(row(label: "Codex Chimes", control: codexSuccessChimeButton))
+            stack.addArrangedSubview(self.sectionTitle("XC Body Relay"))
+            stack.addArrangedSubview(self.row(label: "Relay URL", control: self.relayURLField))
+            stack.addArrangedSubview(self.row(label: "Sender Token", control: self.relaySenderTokenField))
+            stack.addArrangedSubview(self.row(label: "Receiver Token", control: self.relayReceiverTokenField))
+            stack.addArrangedSubview(self.hintRow("Tokens are stored with the local XC Buddy configuration."))
+        })
+        tabView.addTabViewItem(makeTab(title: "Device & Advanced") { stack in
+            stack.addArrangedSubview(self.sectionTitle("Stick Power"))
+            stack.addArrangedSubview(self.timerRow(label: "Display", timers: [
+                ("Dim", self.displayDimSecondsField, "sec"),
+                ("Off", self.displayOffMinutesField, "min")
+            ]))
+            stack.addArrangedSubview(self.timerRow(label: "Deep Sleep", timers: [
+                ("Idle", self.idleSleepMinutesField, "min"),
+                ("Codex", self.codexSleepMinutesField, "min")
+            ]))
 
-        stack.addArrangedSubview(sectionTitle("Stick Power"))
-        stack.addArrangedSubview(timerRow(label: "Display", timers: [
-            ("Dim", displayDimSecondsField, "sec"),
-            ("Off", displayOffMinutesField, "min")
-        ]))
-        stack.addArrangedSubview(timerRow(label: "Deep Sleep", timers: [
-            ("Idle", idleSleepMinutesField, "min"),
-            ("Codex", codexSleepMinutesField, "min")
-        ]))
-
-        stack.addArrangedSubview(sectionTitle("Debug"))
-        stack.addArrangedSubview(row(label: "Audio Cache", control: debugAudioButton))
-        let debugDirRow = NSStackView()
-        debugDirRow.orientation = .horizontal
-        debugDirRow.alignment = .centerY
-        debugDirRow.spacing = 8
-        debugAudioDirectoryField.isEditable = false
-        debugAudioDirectoryField.lineBreakMode = .byTruncatingMiddle
-        let chooseButton = NSButton(title: "Choose...", target: self, action: #selector(chooseDebugDirectory))
-        debugDirRow.addArrangedSubview(debugAudioDirectoryField)
-        debugDirRow.addArrangedSubview(chooseButton)
-        debugAudioDirectoryField.widthAnchor.constraint(equalToConstant: 260).isActive = true
-        stack.addArrangedSubview(row(label: "Audio Folder", control: debugDirRow))
+            stack.addArrangedSubview(self.sectionTitle("Debug"))
+            stack.addArrangedSubview(self.row(label: "Audio Cache", control: self.debugAudioButton))
+            stack.addArrangedSubview(self.row(label: "Audio Folder", control: self.debugAudioDirectoryControl()))
+        })
+        root.addArrangedSubview(tabView)
+        tabView.heightAnchor.constraint(equalToConstant: 520).isActive = true
 
         let buttonRow = NSStackView()
         buttonRow.orientation = .horizontal
@@ -120,17 +124,58 @@ final class SettingsWindowController: NSWindowController {
         buttonRow.addArrangedSubview(statusLabel)
         buttonRow.addArrangedSubview(spacer)
         buttonRow.addArrangedSubview(saveButton)
-        stack.addArrangedSubview(buttonRow)
-        buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        root.addArrangedSubview(buttonRow)
+        buttonRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
         statusLabel.textColor = .secondaryLabelColor
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -24)
+            root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
+            root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
+            root.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -24)
         ])
+    }
+
+    private func makeTab(title: String, content: (NSStackView) -> Void) -> NSTabViewItem {
+        let view = NSView()
+        let stack = settingsStack()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        content(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -12)
+        ])
+
+        let item = NSTabViewItem(identifier: title)
+        item.label = title
+        item.view = view
+        return item
+    }
+
+    private func settingsStack() -> NSStackView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 16
+        return stack
+    }
+
+    private func debugAudioDirectoryControl() -> NSStackView {
+        let control = NSStackView()
+        control.orientation = .horizontal
+        control.alignment = .centerY
+        control.spacing = 8
+        debugAudioDirectoryField.isEditable = false
+        debugAudioDirectoryField.lineBreakMode = .byTruncatingMiddle
+        let chooseButton = NSButton(title: "Choose...", target: self, action: #selector(chooseDebugDirectory))
+        control.addArrangedSubview(debugAudioDirectoryField)
+        control.addArrangedSubview(chooseButton)
+        debugAudioDirectoryField.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        return control
     }
 
     private func configureHotwordsTextView() {
@@ -174,6 +219,9 @@ final class SettingsWindowController: NSWindowController {
         debugAudioDirectoryField.stringValue = config.debugAudioDirectory.path
         codexBridgePortField.integerValue = config.codexBridgePort
         codexSuccessChimeButton.state = config.codexSuccessChime ? .on : .off
+        relayURLField.stringValue = config.relayURL
+        relaySenderTokenField.stringValue = config.relaySenderToken
+        relayReceiverTokenField.stringValue = config.relayReceiverToken
         displayDimSecondsField.integerValue = config.devicePowerTimers.displayDimSeconds
         displayOffMinutesField.stringValue = minuteText(config.devicePowerTimers.displayOffSeconds)
         idleSleepMinutesField.stringValue = minuteText(config.devicePowerTimers.idleDeepSleepSeconds)
@@ -216,6 +264,10 @@ final class SettingsWindowController: NSWindowController {
             codexBridgePort: max(1, min(65535, codexBridgePortField.integerValue)),
             codexBridgeToken: config.codexBridgeToken,
             codexSuccessChime: codexSuccessChimeButton.state == .on,
+            relayMode: config.relayMode,
+            relayURL: relayURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            relaySenderToken: relaySenderTokenField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            relayReceiverToken: relayReceiverTokenField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             devicePowerTimers: DevicePowerTimers(
                 displayDimSeconds: max(5, min(3600, displayDimSecondsField.integerValue)),
                 displayOffSeconds: seconds(fromMinutesField: displayOffMinutesField,

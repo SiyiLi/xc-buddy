@@ -106,7 +106,6 @@ Current desktop events:
 {"event":"ui_state","state":"codex_working","text":"Codex is working"}
 {"event":"ui_state","state":"approval_needed","text":"Approval needed"}
 {"event":"ui_state","state":"codex_done","text":"Turn complete"}
-{"event":"ui_state","state":"codex_done","text":"Turn complete","notify_completion":true}
 {"event":"ui_state","state":"error","text":"ASR timeout"}
 {"event":"interaction_mode","mode":"hold_to_talk"}
 {"event":"interaction_mode","mode":"click_to_talk"}
@@ -127,10 +126,8 @@ is never treated as the source of truth. Current StickS3 firmware does not
 render recognition text on-device because the LVGL font set does not include
 Chinese glyphs; `text` is used only to choose fixed English hints.
 
-`notify_completion` is sent only when XC Buddy replays a completion that
-occurred while a paired Stick was disconnected or in deep sleep. It allows the
-reconnected Stick to play the completion chime once even though its volatile UI
-state restarted at `ready`.
+Completion and error notices are live-only. If the Stick is disconnected or in
+deep sleep when one occurs, XC Buddy does not queue or replay it.
 
 For `ready`, `background_state` records XC Buddy's underlying Codex state:
 `ready`, `codex_working`, or `approval_needed`. The Stick initially renders
@@ -271,8 +268,8 @@ deep sleep after the idle or Codex-specific delay; Codex Working and Approval
 therefore cannot keep the device awake indefinitely. Charging or USB power
 suppresses deep sleep but not the screen-off timer. Any new state or button
 activity turns the display back on. The front button wakes the device from deep
-sleep. XC Buddy retains the latest lifecycle state while the Stick sleeps; a
-missed completion is delivered once, with its chime, on the next reconnect.
+sleep. XC Buddy retains only the latest persistent lifecycle state while the
+Stick sleeps; transient completion and error notices are not replayed.
 
 macOS:
 

@@ -2,6 +2,7 @@ import Foundation
 import Network
 
 enum CodexLifecycleEvent {
+    case idle
     case working
     case approvalNeeded
     case toolCallStarted

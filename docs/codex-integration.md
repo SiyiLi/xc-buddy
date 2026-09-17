@@ -52,9 +52,25 @@ timer. Another approval refreshes that timer, while `PreToolUse` cancels it and
 returns the Stick to Working. If the full minute expires, the Stick plays the
 configured Codex chime and remains on Approval needed until a tool call starts.
 The `Stop` hook changes it back to Idle and sends `codex_done` to the connected
-stick. `SessionEnd` provides
-the same reset when a CLI process exits before a normal Stop event, so XC Buddy
-is not left showing Working after Codex has closed.
+stick. Completion and error notices are live-only and are not replayed after a
+Stick reconnect. `SessionEnd` provides the same reset when a CLI process exits
+before a normal Stop event, so XC Buddy is not left showing Working after Codex
+has closed.
+
+## Relay receiver lifecycle ownership
+
+Receiver XC Buddy is the StickS3's single lifecycle owner. Relay events never
+control the Stick directly: XC Buddy applies both normalized relay events and
+local Stick voice-input events through one shared lifecycle handler for state,
+display, approval timing, chimes, and BLE output.
+
+In Receiver mode, local voice input behaves exactly as it does in Disabled
+mode. `pending_confirmation` is temporary and must be replaced when the paste
+completes: a paste submitted to the frontmost Codex app changes the Stick to
+Working; a paste to any non-Codex app returns it to Ready. These local
+transitions intentionally replace the relay state currently displayed on the
+Stick, but Receiver never publishes them to the relay. Only Sender publishes
+normalized lifecycle events.
 
 The helper remains compatible with the legacy top-level `notify` command,
 which passes an `agent-turn-complete` JSON object as the helper's first

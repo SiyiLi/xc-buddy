@@ -145,6 +145,10 @@ struct AppConfig {
     var codexBridgePort: Int
     var codexBridgeToken: String
     var codexSuccessChime: Bool
+    var relayMode: RelayMode
+    var relayURL: String
+    var relaySenderToken: String
+    var relayReceiverToken: String
     var devicePowerTimers: DevicePowerTimers
 
     static var configDirectory: URL {
@@ -190,6 +194,10 @@ struct AppConfig {
             codexBridgePort: 17321,
             codexBridgeToken: "",
             codexSuccessChime: true,
+            relayMode: .disabled,
+            relayURL: "",
+            relaySenderToken: "",
+            relayReceiverToken: "",
             devicePowerTimers: .default
         )
     }
@@ -240,6 +248,10 @@ struct AppConfig {
             codexBridgePort: portValue(file.codex_bridge_port, default: defaults.codexBridgePort),
             codexBridgeToken: file.codex_bridge_token ?? defaults.codexBridgeToken,
             codexSuccessChime: file.codex_success_chime ?? defaults.codexSuccessChime,
+            relayMode: relayModeValue(file.relay_mode, default: defaults.relayMode),
+            relayURL: file.relay_url ?? defaults.relayURL,
+            relaySenderToken: file.relay_sender_token ?? defaults.relaySenderToken,
+            relayReceiverToken: file.relay_receiver_token ?? defaults.relayReceiverToken,
             devicePowerTimers: DevicePowerTimers(
                 displayDimSeconds: durationValue(file.display_dim_seconds, range: 5...3600,
                                                  default: defaults.devicePowerTimers.displayDimSeconds),
@@ -275,6 +287,10 @@ struct AppConfig {
         codex_bridge_port = \(codexBridgePort)
         codex_bridge_token = "\(codexBridgeToken.tomlEscaped)"
         codex_success_chime = \(codexSuccessChime.tomlValue)
+        relay_mode = "\(relayMode.rawValue)"
+        relay_url = "\(relayURL.tomlEscaped)"
+        relay_sender_token = "\(relaySenderToken.tomlEscaped)"
+        relay_receiver_token = "\(relayReceiverToken.tomlEscaped)"
         display_dim_seconds = \(devicePowerTimers.displayDimSeconds)
         display_off_seconds = \(devicePowerTimers.displayOffSeconds)
         idle_deep_sleep_seconds = \(devicePowerTimers.idleDeepSleepSeconds)
@@ -327,6 +343,10 @@ struct AppConfig {
             codexBridgePort: portValue(values["codex_bridge_port"].flatMap(Int.init), default: defaults.codexBridgePort),
             codexBridgeToken: values["codex_bridge_token"] ?? defaults.codexBridgeToken,
             codexSuccessChime: boolValue(values["codex_success_chime"], default: defaults.codexSuccessChime),
+            relayMode: relayModeValue(values["relay_mode"], default: defaults.relayMode),
+            relayURL: values["relay_url"] ?? defaults.relayURL,
+            relaySenderToken: values["relay_sender_token"] ?? defaults.relaySenderToken,
+            relayReceiverToken: values["relay_receiver_token"] ?? defaults.relayReceiverToken,
             devicePowerTimers: DevicePowerTimers(
                 displayDimSeconds: durationValue(values["display_dim_seconds"].flatMap(Int.init),
                                                  range: 5...3600,
@@ -364,6 +384,11 @@ struct AppConfig {
         default:
             return defaultValue
         }
+    }
+
+    private static func relayModeValue(_ text: String?, default defaultValue: RelayMode) -> RelayMode {
+        guard let text else { return defaultValue }
+        return RelayMode(rawValue: text.lowercased()) ?? defaultValue
     }
 
     private static func portValue(_ value: Int?, default defaultValue: Int) -> Int {
@@ -566,6 +591,10 @@ private struct ConfigFile: Decodable {
     var codex_bridge_port: Int?
     var codex_bridge_token: String?
     var codex_success_chime: Bool?
+    var relay_mode: String?
+    var relay_url: String?
+    var relay_sender_token: String?
+    var relay_receiver_token: String?
     var display_dim_seconds: Int?
     var display_off_seconds: Int?
     var idle_deep_sleep_seconds: Int?

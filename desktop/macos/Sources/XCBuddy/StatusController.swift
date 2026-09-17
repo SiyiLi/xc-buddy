@@ -94,6 +94,7 @@ final class StatusController {
     var onSetAutoEnter: ((Bool) -> Void)?
     var onSetDefaultOutputProfile: ((OutputProfile) -> Void)?
     var onSetDeviceOutputProfile: ((String, OutputProfile) -> Void)?
+    var onSetRelayMode: ((RelayMode) -> Void)?
     var onCheckForUpdates: (() -> Void)? {
         didSet { rebuildMenu() }
     }
@@ -110,6 +111,8 @@ final class StatusController {
     private var deviceOutputProfiles: [String: OutputProfile]
     private var transcriptionProvider = "Unknown"
     private var codexBridgeStatus = "Starting"
+    private var relayMode: RelayMode
+    private var relayStatus = "Disabled"
 
     init(pairedDeviceIDs: [String] = [],
          deviceThemeColors: [String: OverlayThemeColor] = [:],
@@ -117,7 +120,8 @@ final class StatusController {
          interactionMode: InteractionMode = .holdToTalk,
          autoEnter: Bool = true,
          defaultOutputProfile: OutputProfile = .default,
-         deviceOutputProfiles: [String: OutputProfile] = [:]) {
+         deviceOutputProfiles: [String: OutputProfile] = [:],
+         relayMode: RelayMode = .disabled) {
         self.pairedDeviceIDs = pairedDeviceIDs
         self.deviceThemeColors = deviceThemeColors
         self.deviceOverlayPositions = deviceOverlayPositions
@@ -125,6 +129,7 @@ final class StatusController {
         self.autoEnter = autoEnter
         self.defaultOutputProfile = defaultOutputProfile
         self.deviceOutputProfiles = deviceOutputProfiles
+        self.relayMode = relayMode
         self.needsPairing = pairedDeviceIDs.isEmpty
         updateStatusButton(.ready)
         rebuildMenu()
@@ -172,6 +177,18 @@ final class StatusController {
         rebuildMenu()
     }
 
+    func setRelayMode(_ mode: RelayMode) {
+        guard relayMode != mode else { return }
+        relayMode = mode
+        rebuildMenu()
+    }
+
+    func setRelayStatus(_ status: String) {
+        guard relayStatus != status else { return }
+        relayStatus = status
+        rebuildMenu()
+    }
+
     func setFirmwareInfo(_ infoByDeviceID: [String: DeviceFirmwareInfo]) {
         firmwareInfoByDeviceID = infoByDeviceID
         rebuildMenu()
@@ -204,6 +221,8 @@ final class StatusController {
     private func rebuildMenu() {
         menu.removeAllItems()
         addRuntimeSummary()
+        menu.addItem(NSMenuItem.separator())
+        addRelayModeItem()
         menu.addItem(NSMenuItem.separator())
         if hasRecoverableInput {
             menu.addItem(makeMenuItem(
@@ -264,13 +283,35 @@ final class StatusController {
             "Device: \(deviceText)",
             "Transcription: \(transcriptionProvider)",
             "Target: \(defaultOutputProfile.target.displayName)",
-            "Codex: \(codexBridgeStatus)"
+            "Codex: \(codexBridgeStatus)",
+            "Relay: \(relayStatus)"
         ]
         for title in summaries {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         }
+    }
+
+    private func addRelayModeItem() {
+        let relayItem = makeMenuItem(
+            title: "Relay Mode",
+            symbolName: "arrow.left.arrow.right",
+            action: nil
+        )
+        let relaySubmenu = NSMenu()
+        for mode in RelayMode.allCases {
+            let item = makeMenuItem(
+                title: mode.displayName,
+                symbolName: mode == .disabled ? "xmark.circle" : "network",
+                action: #selector(selectRelayMode)
+            )
+            item.representedObject = mode.rawValue
+            item.state = relayMode == mode ? .on : .off
+            relaySubmenu.addItem(item)
+        }
+        relayItem.submenu = relaySubmenu
+        menu.addItem(relayItem)
     }
 
     private func addInputItems() {
@@ -795,6 +836,12 @@ final class StatusController {
 
     @objc private func restoreLastInput() {
         _ = onRestoreLastInput?()
+    }
+
+    @objc private func selectRelayMode(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = RelayMode(rawValue: rawValue) else { return }
+        onSetRelayMode?(mode)
     }
 
     @objc private func selectInteractionMode(_ sender: NSMenuItem) {

@@ -262,7 +262,7 @@ Configuration is stored separately from VoiceStick at:
 ~/Library/Application Support/XC Buddy/config.toml
 ```
 
-API keys and the optional bridge token are plain text in this local v0.1
+API keys and bridge or relay tokens are plain text in this local v0.2
 configuration. Protect the file and never copy its secrets into the repository
 or diagnostic output. `desktop/macos/Config/config.example.toml` documents the
 available fields.

@@ -69,7 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             interactionMode: config.interactionMode,
             autoEnter: config.autoEnter,
             defaultOutputProfile: config.defaultOutputProfile,
-            deviceOutputProfiles: config.deviceOutputProfiles
+            deviceOutputProfiles: config.deviceOutputProfiles,
+            relayMode: config.relayMode
         )
         let coordinator = XCBuddyCoordinator(config: config, statusController: statusController)
 
@@ -126,6 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusController.onSetDeviceOverlayPosition = { [weak self] deviceID, position in
             self?.updateDeviceOverlayPosition(deviceID: deviceID, position: position)
         }
+        statusController.onSetRelayMode = { [weak self] mode in
+            self?.updateRelayMode(mode)
+        }
         if Self.hasSparklePublicKey {
             let updaterController = SPUStandardUpdaterController(
                 startingUpdater: true,
@@ -159,6 +163,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             coordinator?.updateConfig(config)
         } catch {
             statusController?.setStatus("Input save failed")
+        }
+    }
+
+    private func updateRelayMode(_ mode: RelayMode) {
+        var config = self.config
+        config.relayMode = mode
+        do {
+            try config.save()
+            self.config = config
+            statusController?.setRelayMode(mode)
+            coordinator?.updateConfig(config)
+        } catch {
+            statusController?.setStatus("Relay mode save failed")
         }
     }
 

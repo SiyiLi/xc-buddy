@@ -79,7 +79,6 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var reconnectUIState: (state: String, text: String, backgroundState: String?) =
         ("ready", "", nil)
     private var authoritativeUIStates: [UUID: (state: String, text: String, backgroundState: String?)] = [:]
-    private var pendingCodexDoneDeviceIDs = Set<String>()
 
     var onConnectionChange: (([ConnectedXCDevice]) -> Void)?
     var onAudioFrame: ((UUID, AudioFrame) -> Void)?
@@ -140,7 +139,6 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     func updatePairedDeviceIDs(_ deviceIDs: [String]) {
         pairedDeviceIDs = Set(deviceIDs)
-        pendingCodexDoneDeviceIDs.formIntersection(pairedDeviceIDs)
         authoritativeUIStates.removeAll()
         for peripheral in peripherals.values {
             central.cancelPeripheralConnection(peripheral)
@@ -156,8 +154,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func sendUIState(_ state: String, text: String = "", to peripheralID: UUID? = nil,
-                     backgroundState: String? = nil,
-                     notifyCompletion: Bool = false) {
+                     backgroundState: String? = nil) {
         if let peripheralID {
             authoritativeUIStates[peripheralID] = rememberedUIState(
                 state: state,
@@ -174,8 +171,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         let data = BleProtocol.uiStatePayload(
             state: state,
             text: text,
-            backgroundState: backgroundState,
-            notifyCompletion: notifyCompletion
+            backgroundState: backgroundState
         )
         if let peripheralID {
             if let characteristic = controlCharacteristics[peripheralID] {
@@ -204,13 +200,25 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
     }
 
+    func sendTransientUIState(_ state: String, text: String) {
+        reconnectUIState = ("ready", "", nil)
+        let knownPeripheralIDs = Set(authoritativeUIStates.keys).union(connectedDevices.keys)
+        for peripheralID in knownPeripheralIDs {
+            authoritativeUIStates[peripheralID] = reconnectUIState
+        }
+        let data = BleProtocol.uiStatePayload(state: state, text: text)
+        NSLog("BLE send transient ui_state state=\(state) targets=\(controlCharacteristics.count) text_len=\(text.count)")
+        for (id, characteristic) in controlCharacteristics {
+            if let peripheral = peripherals[id] {
+                let deviceID = connectedDevices[id]?.deviceID ?? "unknown"
+                NSLog("BLE send transient ui_state state=\(state) dev=XC-\(deviceID) text_len=\(text.count)")
+                peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+            }
+        }
+    }
+
     private func rememberBroadcastUIState(_ state: String, text: String, backgroundState: String?) {
         if state == "codex_done" {
-            let reachableDeviceIDs = Set<String>(controlCharacteristics.keys.compactMap { peripheralID in
-                guard peripherals[peripheralID]?.state == .connected else { return nil }
-                return connectedDevices[peripheralID]?.deviceID
-            })
-            pendingCodexDoneDeviceIDs.formUnion(pairedDeviceIDs.subtracting(reachableDeviceIDs))
             reconnectUIState = ("ready", "", nil)
         } else {
             reconnectUIState = (state, text, backgroundState)
@@ -227,24 +235,6 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     private func restoreUIState(to peripheralID: UUID) {
         let currentState = authoritativeUIStates[peripheralID] ?? reconnectUIState
-        if let deviceID = connectedDevices[peripheralID]?.deviceID,
-           pendingCodexDoneDeviceIDs.remove(deviceID) != nil {
-            sendUIState(
-                "codex_done",
-                text: "Turn complete",
-                to: peripheralID,
-                notifyCompletion: true
-            )
-            if currentState.state != "ready" {
-                sendUIState(
-                    currentState.state,
-                    text: currentState.text,
-                    to: peripheralID,
-                    backgroundState: currentState.backgroundState
-                )
-            }
-            return
-        }
         sendUIState(
             currentState.state,
             text: currentState.text,
