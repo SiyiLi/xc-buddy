@@ -114,7 +114,12 @@ final class RelayClient: NSObject {
     private var hasOpened = false
     private var reconnectAttempt = 0
     private var reconnectWorkItem: DispatchWorkItem?
+    private var pingWorkItem: DispatchWorkItem?
+    private var pongTimeoutWorkItem: DispatchWorkItem?
+    private var pingInFlight = false
     private var senderState: RelayState = .idle
+    private let pingInterval: TimeInterval = 30
+    private let pongTimeout: TimeInterval = 10
 
     func start(mode: RelayMode, endpoint: String, token: String) {
         precondition(Thread.isMainThread)
@@ -139,6 +144,7 @@ final class RelayClient: NSObject {
         precondition(Thread.isMainThread)
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        cancelPing()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
         taskIdentity = nil
@@ -256,12 +262,14 @@ final class RelayClient: NSObject {
             send(RelayStateMessage(state: senderState))
         }
         receiveNext(on: task, identity: identity)
+        schedulePing(on: task, identity: identity)
     }
 
     private func connectionClosed(identity: UUID) {
         guard taskIdentity == identity else { return }
         let closedMode = mode
         let wasConnected = hasOpened
+        cancelPing()
         task = nil
         taskIdentity = nil
         hasOpened = false
@@ -271,6 +279,54 @@ final class RelayClient: NSObject {
         guard closedMode != .disabled else { return }
         onConnectionStatus?("Reconnecting")
         scheduleReconnect()
+    }
+
+    private func schedulePing(on task: URLSessionWebSocketTask, identity: UUID) {
+        pingWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self, weak task] in
+            guard let self, let task else { return }
+            self.pingWorkItem = nil
+            self.sendPing(on: task, identity: identity)
+        }
+        pingWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + pingInterval, execute: workItem)
+    }
+
+    private func sendPing(on task: URLSessionWebSocketTask, identity: UUID) {
+        guard self.task === task, taskIdentity == identity, !pingInFlight else { return }
+        pingInFlight = true
+
+        let timeoutWorkItem = DispatchWorkItem { [weak self, weak task] in
+            guard let self, let task,
+                  self.task === task, self.taskIdentity == identity, self.pingInFlight else { return }
+            task.cancel()
+            self.connectionClosed(identity: identity)
+        }
+        pongTimeoutWorkItem = timeoutWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + pongTimeout, execute: timeoutWorkItem)
+
+        task.sendPing { [weak self, weak task] error in
+            DispatchQueue.main.async {
+                guard let self, let task,
+                      self.task === task, self.taskIdentity == identity, self.pingInFlight else { return }
+                self.pongTimeoutWorkItem?.cancel()
+                self.pongTimeoutWorkItem = nil
+                self.pingInFlight = false
+                if error != nil {
+                    self.connectionClosed(identity: identity)
+                } else {
+                    self.schedulePing(on: task, identity: identity)
+                }
+            }
+        }
+    }
+
+    private func cancelPing() {
+        pingWorkItem?.cancel()
+        pingWorkItem = nil
+        pongTimeoutWorkItem?.cancel()
+        pongTimeoutWorkItem = nil
+        pingInFlight = false
     }
 
     private func scheduleReconnect() {
