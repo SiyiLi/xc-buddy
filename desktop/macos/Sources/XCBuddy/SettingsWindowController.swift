@@ -217,7 +217,7 @@ final class SettingsWindowController: NSWindowController {
         llmModelField.stringValue = config.llmModel
         debugAudioButton.state = config.debugAudioCache ? .on : .off
         debugAudioDirectoryField.stringValue = config.debugAudioDirectory.path
-        codexBridgePortField.integerValue = config.codexBridgePort
+        codexBridgePortField.stringValue = String(config.codexBridgePort)
         codexSuccessChimeButton.state = config.codexSuccessChime ? .on : .off
         relayURLField.stringValue = config.relayURL
         relaySenderTokenField.stringValue = config.relaySenderToken
