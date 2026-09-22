@@ -21,7 +21,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
             case .device:
                 return "Pair Device"
             case .transcription:
-                return "NVIDIA Key"
+                return "Transcription"
             case .accessibility:
                 return "Accessibility"
             case .finish:
@@ -184,8 +184,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
             detailLabel.stringValue = "Choose a nearby XC-XXXX device. XC Buddy needs a paired device before the app can listen."
             contentStack.addArrangedSubview(deviceView())
         case .transcription:
-            titleLabel.stringValue = "Configure NVIDIA transcription"
-            detailLabel.stringValue = "Enter the NVIDIA Inference API key used to transcribe audio from your XC."
+            titleLabel.stringValue = "Configure transcription"
+            detailLabel.stringValue = "Enter the API key used to transcribe audio."
             contentStack.addArrangedSubview(transcriptionView())
         case .accessibility:
             titleLabel.stringValue = "Allow text insertion"
@@ -270,7 +270,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
         stack.alignment = .leading
         stack.spacing = 8
         stack.addArrangedSubview(summaryLine("Device", value: config.pairedDeviceIDs.first.map { "XC-\($0)" } ?? "Not paired"))
-        stack.addArrangedSubview(summaryLine("Transcription", value: "NVIDIA Inference"))
+        stack.addArrangedSubview(summaryLine("Transcription", value: "Configured"))
         stack.addArrangedSubview(summaryLine("Accessibility", value: AXIsProcessTrusted() ? "Allowed" : "Not allowed yet"))
         return stack
     }
@@ -486,7 +486,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, CB
             }
         case .transcription:
             if config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                statusLabel.stringValue = "Enter your NVIDIA Inference API key."
+                statusLabel.stringValue = "Enter the API key used to transcribe audio."
                 return false
             }
         case .accessibility:

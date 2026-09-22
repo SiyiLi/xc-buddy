@@ -378,13 +378,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config.pairedDeviceIDs.removeAll { $0 == deviceID }
         config.deviceThemeColors.removeValue(forKey: deviceID)
         config.deviceOverlayPositions.removeValue(forKey: deviceID)
+        config.deviceOutputProfiles.removeValue(forKey: deviceID)
         do {
             try config.save()
+            self.config = config
             statusController?.setPairedDeviceIDs(config.pairedDeviceIDs)
             statusController?.setDeviceThemeColors(config.deviceThemeColors)
             statusController?.setDeviceOverlayPositions(config.deviceOverlayPositions)
             statusController?.setConnectedDevices([])
-            coordinator?.updatePairedDeviceIDs(config.pairedDeviceIDs)
+            coordinator?.updateConfig(config)
         } catch {
             statusController?.setStatus("Forget device failed")
         }

@@ -57,15 +57,15 @@ final class OpenAITranscriptionClient: ASRClient {
 
     func start(options: ASRSessionOptions) -> Bool {
         guard chatCompletionsURL != nil else {
-            onError?("Invalid NVIDIA inference base URL")
+            onError?("Transcription base URL is invalid")
             return false
         }
         guard !config.openAIModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            onError?("Missing audio transcription model")
+            onError?("Transcription model is not set")
             return false
         }
         guard !config.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            onError?("Missing NVIDIA inference API key")
+            onError?("Transcription API key is not set")
             return false
         }
 

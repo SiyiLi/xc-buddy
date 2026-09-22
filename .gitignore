@@ -18,6 +18,7 @@ desktop/macos/Config/config.toml
 scripts/.signing_sha1
 __pycache__/
 *.py[cod]
+*.egg-info/
 node_modules/
 website/dist/
 firmware/.vscode/

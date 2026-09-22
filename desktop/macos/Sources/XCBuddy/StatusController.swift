@@ -109,7 +109,6 @@ final class StatusController {
     private var autoEnter: Bool
     private var defaultOutputProfile: OutputProfile
     private var deviceOutputProfiles: [String: OutputProfile]
-    private var transcriptionProvider = "Unknown"
     private var codexBridgeStatus = "Starting"
     private var relayMode: RelayMode
     private var relayStatus = "Disabled"
@@ -162,12 +161,6 @@ final class StatusController {
         guard connectedDevices.map(\.deviceID) != sortedDevices.map(\.deviceID) ||
                 connectedDevices.map(\.name) != sortedDevices.map(\.name) else { return }
         connectedDevices = sortedDevices
-        rebuildMenu()
-    }
-
-    func setTranscriptionProvider(_ name: String) {
-        guard transcriptionProvider != name else { return }
-        transcriptionProvider = name
         rebuildMenu()
     }
 
@@ -277,14 +270,25 @@ final class StatusController {
     }
 
     private func addRuntimeSummary() {
-        let deviceText = connectedDevices.first.map { "\($0.name) connected" }
-            ?? (pairedDeviceIDs.first.map { "XC-\($0) scanning" } ?? "Not paired")
+        let deviceText: String
+        if relayMode == .sender {
+            deviceText = "Bluetooth paused"
+        } else {
+            deviceText = connectedDevices.first.map { "\($0.name) connected" }
+                ?? (pairedDeviceIDs.first.map { "XC-\($0) scanning" } ?? "Not paired")
+        }
+        let relayText: String
+        if relayMode != .disabled &&
+            ["Connecting", "Connected", "Reconnecting"].contains(relayStatus) {
+            relayText = "\(relayStatus) as a \(relayMode.displayName.lowercased())"
+        } else {
+            relayText = relayStatus
+        }
         let summaries = [
             "Device: \(deviceText)",
-            "Transcription: \(transcriptionProvider)",
             "Target: \(defaultOutputProfile.target.displayName)",
             "Codex: \(codexBridgeStatus)",
-            "Relay: \(relayStatus)"
+            "Relay: \(relayText)"
         ]
         for title in summaries {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -382,21 +386,38 @@ final class StatusController {
         let connectedByID = Dictionary(uniqueKeysWithValues: connectedDevices.map { ($0.deviceID, $0) })
         for deviceID in pairedDeviceIDs.sorted() {
             let connectedDevice = connectedByID[deviceID]
+            let bluetoothPaused = relayMode == .sender
+            let deviceSymbolName: String
+            let stateTitle: String
+            let stateSymbolName: String
+            if bluetoothPaused {
+                deviceSymbolName = "pause.circle"
+                stateTitle = "Bluetooth paused"
+                stateSymbolName = "pause.circle"
+            } else if connectedDevice == nil {
+                deviceSymbolName = "link.circle"
+                stateTitle = "Scanning"
+                stateSymbolName = "antenna.radiowaves.left.and.right"
+            } else {
+                deviceSymbolName = "link.circle.fill"
+                stateTitle = "Connected"
+                stateSymbolName = "checkmark.circle"
+            }
             let title = connectedDevice?.name ?? "XC-\(deviceID)"
             let deviceItem = makeMenuItem(
                 title: title,
-                symbolName: connectedDevice == nil ? "link.circle" : "link.circle.fill",
+                symbolName: deviceSymbolName,
                 action: nil
             )
             let submenu = NSMenu()
             let stateItem = NSMenuItem(
-                title: connectedDevice == nil ? "Scanning" : "Connected",
+                title: stateTitle,
                 action: nil,
                 keyEquivalent: ""
             )
             stateItem.isEnabled = false
             stateItem.image = Self.symbolImage(
-                named: connectedDevice == nil ? "antenna.radiowaves.left.and.right" : "checkmark.circle",
+                named: stateSymbolName,
                 accessibilityDescription: stateItem.title
             )
             submenu.addItem(stateItem)

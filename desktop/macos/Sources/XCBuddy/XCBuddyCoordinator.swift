@@ -185,7 +185,6 @@ final class XCBuddyCoordinator {
     }
 
     func start() {
-        statusController.setTranscriptionProvider("NVIDIA Inference")
         ble.onConnectionChange = { [weak self] connectedDevices in
             guard let self else { return }
             self.statusController.setConnectedDevices(connectedDevices)
@@ -275,7 +274,6 @@ final class XCBuddyCoordinator {
         asr = makeASRClient(config: config)
         translator = LLMTranslationClient(config: config)
         configureASRCallbacks()
-        statusController.setTranscriptionProvider("NVIDIA Inference")
         if bridgeChanged, config.relayMode != .receiver { startCodexBridge() }
 
         statusController.setRelayMode(config.relayMode)

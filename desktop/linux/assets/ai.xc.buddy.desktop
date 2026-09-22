@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=XC Buddy
+Comment=Voice and Codex companion for the XC StickS3
+Exec=xc-buddy
+Icon=__XC_BUDDY_APP_ICON__
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=voice;dictation;bluetooth;codex;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

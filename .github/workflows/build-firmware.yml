@@ -27,6 +27,7 @@ jobs:
           path: firmware
           command: |
             set -euo pipefail
+            firmware_version="$(tr -d '[:space:]' < version.txt)"
             idf.py build
             mkdir -p ../dist
             cp build/xc_buddy.bin ../dist/xc-buddy-sticks3-ota.bin
@@ -38,6 +39,10 @@ jobs:
               > xc-buddy-sticks3-ota.bin.sha256
             sha256sum xc-buddy-sticks3-merged.bin \
               > xc-buddy-sticks3-merged.bin.sha256
+            printf '{"hardware":"stick_s3","version":"%s","ota_asset":"xc-buddy-sticks3-ota.bin"}\n' \
+              "$firmware_version" > xc-buddy-sticks3-firmware.json
+            sha256sum xc-buddy-sticks3-firmware.json \
+              > xc-buddy-sticks3-firmware.json.sha256
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
@@ -45,9 +50,41 @@ jobs:
           name: xc-buddy-sticks3-firmware
           path: dist/*
 
+  linux:
+    if: startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_PUBLIC_FIRMWARE_RELEASES == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: desktop/linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build immutable Linux release archive
+        run: >-
+          python scripts/build-user.py
+          --build-env /tmp/xc-buddy-build-env
+          --out-dir /tmp/xc-buddy-artifacts
+
+      - name: Upload Linux release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: xc-buddy-linux-py${{ matrix.python-version }}
+          path: |
+            /tmp/xc-buddy-artifacts/*.tar.gz
+            /tmp/xc-buddy-artifacts/*.tar.gz.sha256
+
   release:
     if: startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_PUBLIC_FIRMWARE_RELEASES == 'true'
-    needs: firmware
+    needs:
+      - firmware
+      - linux
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -57,16 +94,17 @@ jobs:
       - name: Validate release version
         shell: bash
         run: |
-          version="$(tr -d '[:space:]' < VERSION)"
+          app_version="$(tr -d '[:space:]' < VERSION)"
           firmware_version="$(tr -d '[:space:]' < firmware/version.txt)"
-          cmake_version="$(sed -nE 's/^project\(xc_buddy VERSION ([^)]+)\)$/\1/p' firmware/CMakeLists.txt)"
-          app_version="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\([^<]*\)<\/string>.*/\1/p;}' desktop/macos/Sources/XCBuddy/Info.plist)"
-          app_build="$(sed -n '/<key>CFBundleVersion<\/key>/{n;s/.*<string>\([^<]*\)<\/string>.*/\1/p;}' desktop/macos/Sources/XCBuddy/Info.plist)"
-          test "$GITHUB_REF_NAME" = "v$version"
-          test "$firmware_version" = "$version"
-          test "$cmake_version" = "$version"
-          test "$app_version" = "$version"
-          test "$app_build" = "$version"
+          firmware_cmake_version="$(sed -nE 's/^project\(xc_buddy VERSION ([^)]+)\)$/\1/p' firmware/CMakeLists.txt)"
+          mac_app_version="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\([^<]*\)<\/string>.*/\1/p;}' desktop/macos/Sources/XCBuddy/Info.plist)"
+          mac_app_build="$(sed -n '/<key>CFBundleVersion<\/key>/{n;s/.*<string>\([^<]*\)<\/string>.*/\1/p;}' desktop/macos/Sources/XCBuddy/Info.plist)"
+          linux_app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/linux/pyproject.toml)"
+          test "$GITHUB_REF_NAME" = "v$app_version"
+          test "$mac_app_version" = "$app_version"
+          test "$mac_app_build" = "$app_version"
+          test "$linux_app_version" = "$app_version"
+          test "$firmware_version" = "$firmware_cmake_version"
 
       - name: Download firmware artifacts
         uses: actions/download-artifact@v4
@@ -74,15 +112,63 @@ jobs:
           name: xc-buddy-sticks3-firmware
           path: dist
 
+      - name: Download Linux release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xc-buddy-linux-py*
+          path: dist
+          merge-multiple: true
+
+      - name: Validate firmware manifest
+        shell: bash
+        run: |
+          firmware_version="$(tr -d '[:space:]' < firmware/version.txt)"
+          FIRMWARE_VERSION="$firmware_version" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path("dist/xc-buddy-sticks3-firmware.json").read_text()
+          )
+          expected = {
+              "hardware": "stick_s3",
+              "version": os.environ["FIRMWARE_VERSION"],
+              "ota_asset": "xc-buddy-sticks3-ota.bin",
+          }
+          if manifest != expected:
+              raise SystemExit(f"invalid firmware manifest: {manifest!r}")
+          PY
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          mapfile -t linux_archives < <(
+            find dist -maxdepth 1 -type f \
+              -name 'xc-buddy-linux-*.tar.gz' -print | sort
+          )
+          mapfile -t linux_checksums < <(
+            find dist -maxdepth 1 -type f \
+              -name 'xc-buddy-linux-*.tar.gz.sha256' -print | sort
+          )
+          test "${#linux_archives[@]}" -eq 2
+          test "${#linux_checksums[@]}" -eq 2
+          (
+            cd dist
+            sha256sum --check xc-buddy-linux-*.tar.gz.sha256
+            sha256sum --check xc-buddy-sticks3-*.sha256
+          )
           gh release create "$GITHUB_REF_NAME" \
+            dist/xc-buddy-sticks3-firmware.json \
+            dist/xc-buddy-sticks3-firmware.json.sha256 \
             dist/xc-buddy-sticks3-ota.bin \
             dist/xc-buddy-sticks3-ota.bin.sha256 \
             dist/xc-buddy-sticks3-merged.bin \
             dist/xc-buddy-sticks3-merged.bin.sha256 \
+            "${linux_archives[@]}" \
+            "${linux_checksums[@]}" \
             --verify-tag \
             --title "XC Buddy $GITHUB_REF_NAME" \
             --generate-notes

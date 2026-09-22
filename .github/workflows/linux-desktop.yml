@@ -1,0 +1,59 @@
+name: Linux desktop
+
+on:
+  push:
+    paths:
+      - "desktop/linux/**"
+      - "VERSION"
+      - ".github/workflows/linux-desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/linux/**"
+      - "VERSION"
+      - ".github/workflows/linux-desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: desktop/linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            desktop/linux/pyproject.toml
+            desktop/linux/requirements-linux.lock
+      - run: python -m pip install build mypy ruff -e .
+      - run: ruff format --check app tests scripts
+      - run: ruff check app tests scripts
+      - run: mypy --ignore-missing-imports app
+      - run: test "$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)" = "$(cat ../../VERSION)"
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/build-user.py --build-env /tmp/xc-buddy-build-env --out-dir /tmp/xc-buddy-artifacts
+      - name: Install immutable artifact
+        run: |
+          artifact=$(find /tmp/xc-buddy-artifacts -mindepth 1 -maxdepth 1 -type d)
+          python scripts/install-user.py "$artifact" --data-home /tmp/xc-buddy-data --config-home /tmp/xc-buddy-config --bin-dir /tmp/xc-buddy-bin
+          /tmp/xc-buddy-bin/xc-buddy --version
+          (
+            cd /tmp
+            /tmp/xc-buddy-data/xc-buddy/current/venv/bin/python -m unittest discover -s "$GITHUB_WORKSPACE/desktop/linux/tests" -v
+          )
+          /tmp/xc-buddy-data/xc-buddy/current/venv/bin/python -m pip --no-cache-dir check
+      - name: Upload immutable Linux release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: xc-buddy-linux-py${{ matrix.python-version }}
+          path: |
+            /tmp/xc-buddy-artifacts/*.tar.gz
+            /tmp/xc-buddy-artifacts/*.tar.gz.sha256

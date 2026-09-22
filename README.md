@@ -1,24 +1,33 @@
 # XC Buddy
 
-XC Buddy turns Louis's M5Stack StickS3 into a local voice-and-status companion for macOS and Codex. The device advertises as `XC-XXXX`; the macOS menu bar app receives Ogg/Opus audio over BLE, transcribes it, pastes into the focused app, and reflects Codex lifecycle events back to the device.
+XC Buddy turns Louis's M5Stack StickS3 into a local voice-and-status companion for macOS, Linux, and Codex. The device advertises as `XC-XXXX`; the desktop app receives Ogg/Opus audio over BLE, transcribes it, pastes into the focused app, and reflects Codex lifecycle events back to the device.
 
 > **Licensing notice:** this personal project is derived from upstream [VoiceStick](https://github.com/78/voicestick), which currently has no declared license. Public repository visibility does not grant redistribution rights; resolve the upstream licensing status before distributing XC Buddy binaries or firmware.
 
 ## Architecture
 
 ```text
-StickS3 mic -> Opus -> BLE (existing UUIDs) -> XC Buddy macOS
+StickS3 mic -> Opus -> BLE (existing UUIDs) -> XC Buddy desktop
                                               |-> ASR -> focused app / subtitles
 Codex notify helper -> 127.0.0.1:17321 -------|-> device lifecycle display
 ```
 
 - `firmware/`: ESP-IDF firmware for StickS3. The UUIDs and audio/control framing remain VoiceStick-compatible.
 - `desktop/macos/`: native AppKit menu bar application for macOS 12+.
+- `desktop/linux/`: BlueZ-based Linux tray application with X11 and Wayland input support.
 - `scripts/xc-buddy-codex-notify.py`: quiet, standard-library Codex lifecycle bridge.
 - `scripts/install-xc-buddy-codex-hooks.py`: idempotent user-level Codex hook installer.
 - `docs/codex-integration.md`: loopback bridge setup and event semantics.
 - `docs/internal-transcription.md`: OpenAI-compatible transcription contract.
 - `docs/protocol.md`: unchanged BLE protocol framing and UUIDs.
+
+The macOS and Linux clients share the same workflows, controls, persisted
+options, and user-facing wording. Native widget texture may differ. macOS uses
+its nested menu-bar device menu; GNOME's tray protocol cannot reliably present
+that third menu level, so selecting a device on Linux opens the equivalent
+XC device window. The temporary [feature parity checklist](FEATURE_PARITY.md)
+tracks the remaining qualification work and will be removed after parity is
+verified.
 
 ## Operations runbook
 
@@ -99,23 +108,33 @@ ls -lh dist/xc-buddy-sticks3-ota.bin dist/xc-buddy-sticks3-merged.bin
 
 The verified v0.1.1 build produced a `0x15b950`-byte app image with 55% of the
 3 MB OTA slot free. GitHub Actions runs the same build and checksum commands
-inside the ESP-IDF container, then uploads all four files. Keep checksum
-generation inside that container because it owns the `dist` directory.
+inside the ESP-IDF container, then uploads both images, their checksums, and the
+generated firmware manifest with its checksum. Keep checksum generation inside
+that container because it owns the `dist` directory.
 
 ### Publish firmware for XC Buddy OTA
 
 XC Buddy checks this public repository's latest GitHub Release anonymously. It
 does not use a GitHub token, store GitHub credentials, or require a GitHub
 configuration field. The app only accepts the exact StickS3 release asset
-`xc-buddy-sticks3-ota.bin`, verifies the size and GitHub-provided SHA-256 digest,
-and then transfers it through BLE OTA.
+`xc-buddy-sticks3-ota.bin` named by
+`xc-buddy-sticks3-firmware.json`. It verifies both assets against their
+GitHub-provided sizes and SHA-256 digests before transferring the image through
+BLE OTA.
 
-The release version must match in all four locations before publishing:
+The app and firmware have independent versions. The app version must agree in:
 
-- `VERSION`
+- `VERSION`, which is also consumed by the Windows build
+- both bundle version values in `desktop/macos/Sources/XCBuddy/Info.plist`
+- `desktop/linux/pyproject.toml`
+
+The firmware version must agree in:
+
 - `firmware/version.txt`
 - the `project(xc_buddy VERSION ...)` value in `firmware/CMakeLists.txt`
-- both bundle version values in `desktop/macos/Sources/XCBuddy/Info.plist`
+
+The two versions do not need to match. The release tag is `v<app-version>`, and
+the generated firmware manifest carries the independent firmware version.
 
 Public firmware publishing is disabled by default while the upstream licensing
 status remains unresolved. After redistribution rights are confirmed, enable
@@ -127,21 +146,22 @@ gh variable set ENABLE_PUBLIC_FIRMWARE_RELEASES \
   --repo SiyiLi/xc-buddy
 ```
 
-Then, after building and testing a new version, commit it on `main` and push a
-new, never-reused version tag. For example, for version `0.1.1`:
+Then, after building and testing a new app version, commit it on `main` and push
+a new, never-reused app version tag. For example, for app version `0.2.2`:
 
 ```sh
-git tag -a v0.1.1 -m "XC Buddy v0.1.1"
+git tag -a v0.2.2 -m "XC Buddy v0.2.2"
 git push origin main
-git push origin v0.1.1
+git push origin v0.2.2
 ```
 
 The `v*` tag starts `.github/workflows/build-firmware.yml`. The workflow builds
 the OTA and full USB images and writes checksums. When
-`ENABLE_PUBLIC_FIRMWARE_RELEASES` is `true`, it also checks that the tag matches
-all four version locations and creates a public GitHub Release using GitHub
-Actions' built-in token. Leave the variable unset or set it to `false` until
-redistribution is permitted.
+`ENABLE_PUBLIC_FIRMWARE_RELEASES` is `true`, it also builds the Python 3.10 and
+3.12 Linux update archives, checks the app and firmware version groups
+independently, and creates one public GitHub Release containing all assets using
+GitHub Actions' built-in token. Leave the variable unset or set it to `false`
+until redistribution is permitted.
 
 Do not attach the merged image to the BLE updater. The release contains it only
 for manual USB recovery; XC Buddy downloads only the OTA app-slot image.
@@ -207,7 +227,9 @@ than treating that command's exit status as proof of a normal boot. See the
 After boot, the target firmware advertises as `XC-717C` while preserving the
 VoiceStick-compatible GATT service and characteristic UUIDs.
 
-### 5. Build and launch the macOS app
+### 5. Build and launch the desktop app
+
+#### macOS
 
 SwiftPM owns all application dependencies; do not install them with a package
 manager. On a normally matched Xcode/Command Line Tools installation, use:
@@ -247,19 +269,75 @@ executable; signed universal `.app`, ZIP, and DMG packaging through
 `scripts/build-macos.sh` and `scripts/make-dmg.sh` was not exercised in this
 test session.
 
+#### Linux
+
+XC Buddy supports Python 3.10+, BlueZ 5.55+, and a graphical X11 or Wayland
+session. On Ubuntu, install only the native helpers needed by the active
+session:
+
+```sh
+# X11
+sudo apt install python3-venv python3-tk bluez xdotool xclip
+
+# GNOME Wayland
+sudo apt install python3-venv python3-tk bluez wl-clipboard \
+  x11-xserver-utils gir1.2-atspi-2.0
+
+# Other wlroots Wayland compositors
+sudo apt install python3-venv python3-tk bluez wl-clipboard wtype
+```
+
+Build an immutable artifact, install that exact artifact into XC Buddy's
+per-user release directory, and run the installed application:
+
+```sh
+python3 desktop/linux/scripts/build-user.py
+# Substitute the exact artifact directory printed by the build command.
+python3 desktop/linux/scripts/install-user.py desktop/linux/dist/linux/<build-id>
+~/.local/bin/xc-buddy --doctor
+~/.local/bin/xc-buddy --version
+```
+
+The builder uses an app-scoped environment under
+`$XDG_CACHE_HOME/xc-buddy/build-venv`. The installer verifies the artifact and
+creates an isolated runtime under
+`$XDG_DATA_HOME/xc-buddy/releases/<build-id>`. It does not install packages into
+the system Python environment. Launch XC Buddy from **Show Applications** for
+desktop acceptance testing; direct source and editable-install launches are
+development tools, not acceptance builds.
+
+The builder also creates a runtime-specific release archive named like
+`xc-buddy-linux-x86_64-py310-0.2.2.tar.gz` plus its checksum. For public `v*`
+tags, the release workflow builds and attaches Python 3.10 and 3.12 archives
+automatically. This enables **Check for App Updates...** for either supported
+runtime on that Linux architecture. The installed app downloads the matching
+archive, verifies GitHub's SHA-256 digest and every internal artifact checksum,
+installs it as another immutable per-user release, switches the `current` link,
+and restarts through the stable launcher.
+
+Ubuntu normally provides the StatusNotifier host through its AppIndicator
+extension. GNOME Shell owns the tray popup, including outside-click dismissal.
+The Linux app uses native GTK windows for Settings, Pairing, firmware progress,
+app updates, and device controls. App updates are enabled only for a standard
+immutable per-user installation; source runs never modify their environment.
+
 ### 6. Complete first-run onboarding and pairing
 
 When no configuration exists, XC Buddy opens onboarding automatically:
 
 1. Select `XC-717C` from the discovered devices.
-2. Enter the NVIDIA Inference API key locally.
-3. Grant XC Buddy Accessibility permission for focused-app paste and Return.
-4. Finish setup and confirm the menu bar reports `XC-717C` as connected.
+2. Enter the transcription API key locally.
+3. Enable the platform's focused-app integration: Accessibility permission on
+   macOS, or the clipboard and input helpers reported by `--doctor` on Linux.
+4. Finish setup and confirm the menu bar or tray reports `XC-717C` as
+   connected.
 
-Configuration is stored separately from VoiceStick at:
+Configuration is stored separately from VoiceStick:
 
 ```text
-~/Library/Application Support/XC Buddy/config.toml
+macOS: ~/Library/Application Support/XC Buddy/config.toml
+Linux: $XDG_CONFIG_HOME/xc-buddy/config.toml
+       (normally ~/.config/xc-buddy/config.toml)
 ```
 
 API keys and bridge or relay tokens are plain text in this local v0.2
@@ -284,13 +362,33 @@ With `auto_enter = true`, Return inserts a newline in TextEdit and sends the
 message in chat applications. The front button pauses the confirmation
 countdown and confirms it when pressed again; the side button cancels.
 
-The August 5, 2026 test successfully dictated, transcribed, pasted, and sent two
-separate chat messages from `XC-717C`. That validates the complete path:
+The August 5, 2026 macOS test successfully dictated, transcribed, pasted, and
+sent two separate chat messages from `XC-717C`. That validates this complete
+path on that tested Mac; Linux normal mode still requires its own real-device
+qualification:
 
 ```text
-StickS3 mic -> Opus -> BLE -> XC Buddy -> NVIDIA transcription
+StickS3 mic -> Opus -> BLE -> XC Buddy -> transcription
              -> focused-app paste -> Return/send
 ```
+
+## Development checks
+
+Keep Linux development dependencies inside a project-local environment:
+
+```sh
+python3 -m venv desktop/linux/.venv
+desktop/linux/.venv/bin/python -m pip install -e desktop/linux ruff mypy
+desktop/linux/.venv/bin/python -m unittest discover -s desktop/linux/tests -v
+desktop/linux/.venv/bin/ruff format --check desktop/linux/app desktop/linux/tests
+desktop/linux/.venv/bin/ruff check desktop/linux/app desktop/linux/tests
+desktop/linux/.venv/bin/mypy --ignore-missing-imports desktop/linux/app
+```
+
+The test suite does not require Bluetooth hardware, a display, or external
+network access. Local bridge and relay integration tests use loopback only;
+they do not prove delivery to a remote receiver. Use `swift test
+--package-path desktop/macos` for macOS source tests.
 
 ### Alternative firmware workflows
 
@@ -317,8 +415,9 @@ StickS3, and program it.
 - Side button: cancel or restore the most recent recoverable input.
 - Device display: offline/booting, ready, listening, thinking, confirmation, Codex working, approval needed, done, and error states.
 - Firmware `0.1.3` and later shows `Codex done` with its version for ten seconds, then returns to Ready.
-- XC Buddy normally disconnects explicitly when it quits. As a crash-only fallback, it renews the BLE connection lease with one small heartbeat every 30 seconds; firmware releases a stale macOS BLE link after 90 seconds. Heartbeats do not wake the display or postpone the five-minute deep-sleep timer.
-- Menu bar summary: device connection, ASR provider, output target, and Codex bridge status.
+- XC Buddy normally disconnects explicitly when it quits. As a crash-only fallback, it renews the BLE connection lease with one small heartbeat every 30 seconds; firmware releases a stale desktop BLE link after 90 seconds. Heartbeats do not wake the display or postpone the five-minute deep-sleep timer.
+- Menu bar/tray summary: device connection, output target, Codex bridge status,
+  and relay status.
 
 See [Codex integration](docs/codex-integration.md) and [internal transcription](docs/internal-transcription.md) for exact local setup.
 

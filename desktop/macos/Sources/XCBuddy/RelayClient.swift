@@ -201,7 +201,7 @@ final class RelayClient: NSObject {
 
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else {
-            onConnectionStatus?("Relay \(mode.displayName.lowercased()) token is not set")
+            onConnectionStatus?("\(mode.displayName) token is not set")
             return
         }
 

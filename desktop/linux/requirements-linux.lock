@@ -1,0 +1,8 @@
+# Exact runtime dependencies included in each personal Linux artifact.
+# Update this file intentionally alongside pyproject.toml dependency changes.
+async-timeout==5.0.1
+bleak==1.1.1
+dbus-fast==5.0.22
+tomli==2.4.1 ; python_version < "3.11"
+typing-extensions==4.16.0
+websockets==15.0.1

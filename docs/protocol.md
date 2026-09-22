@@ -1,13 +1,13 @@
 # XC Buddy Protocol
 
-This document describes the protocol implemented by the current firmware and macOS desktop app.
+This document describes the protocol implemented by the current firmware and XC Buddy desktop apps.
 
 ## Goals
 
-- Low-latency push-to-talk audio from StickS3 to macOS.
+- Low-latency push-to-talk audio from StickS3 to the desktop app.
 - Opus over BLE to keep wireless bandwidth low.
-- Ogg Opus forwarding from macOS to NVIDIA Inference.
-- Final ASR text insertion into the focused macOS input field after release and confirmation.
+- Ogg Opus forwarding from the desktop app to NVIDIA Inference.
+- Final ASR text insertion into the focused desktop input field after release and confirmation.
 
 ## BLE GATT
 
@@ -23,13 +23,16 @@ Characteristics:
 
 | Name | UUID | Direction | Properties |
 | --- | --- | --- | --- |
-| `audio_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5101` | StickS3 -> Mac | notify |
-| `state_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5102` | StickS3 -> Mac | notify |
-| `control_rx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5103` | Mac -> StickS3 | write without response |
-| `ota_rx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5104` | Mac -> StickS3 | write, write without response |
-| `ota_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5105` | StickS3 -> Mac | notify |
+| `audio_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5101` | StickS3 -> desktop | notify |
+| `state_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5102` | StickS3 -> desktop | notify |
+| `control_rx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5103` | Desktop -> StickS3 | write without response |
+| `ota_rx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5104` | Desktop -> StickS3 | write, write without response |
+| `ota_tx` | `8f2f0b84-6e6f-4b23-88f7-3a3ceafc5105` | StickS3 -> desktop | notify |
 
-The desktop app scans for this service and only connects to devices whose `XC-XXXX` ID is present in the local paired-device list. Multiple paired devices may be connected at the same time; audio, state, control, and OTA handling are scoped by CoreBluetooth peripheral identity.
+The desktop app scans for this service and only connects to devices whose
+`XC-XXXX` ID is present in the local paired-device list. Each macOS or Linux app
+connects to at most one stick at a time and resumes scanning after that stick
+disconnects.
 
 ## Audio Frame
 
@@ -51,7 +54,7 @@ struct AudioBleFrame {
 
 The payload contains one raw Opus packet when `payload_len > 0`. The firmware currently encodes 60 ms of 16 kHz mono audio per packet. When recording stops, the firmware also sends an end frame with `flags & 0x02` and an empty payload.
 
-The macOS app wraps incoming Opus packets into an Ogg Opus stream before sending them to ASR. It does not decode Opus to PCM.
+The desktop app wraps incoming Opus packets into an Ogg Opus stream before sending them to ASR. It does not decode Opus to PCM.
 
 ## State Event
 
@@ -93,7 +96,7 @@ Deprecated firmware-to-app events:
 
 ## Control Event
 
-The Mac writes compact JSON to `control_rx`. Control events are authoritative UI
+The desktop app writes compact JSON to `control_rx`. Control events are authoritative UI
 state from the app to the firmware display.
 
 Current desktop events:
@@ -170,13 +173,15 @@ Deprecated app-to-firmware events:
 
 ## BLE OTA
 
-The firmware uses a custom OTA channel over the same Voice Stick service. The macOS app writes OTA `begin` and `end` frames with BLE write-with-response, and streams OTA `data` frames with write-without-response using CoreBluetooth flow control.
+The firmware uses a custom OTA channel over the same Voice Stick service. The desktop app writes OTA `begin` and `end` frames with BLE write-with-response, and streams OTA `data` frames with write-without-response using platform BLE flow control.
 The device sends progress notifications roughly every 32 KB of accepted firmware data.
 
 XC Buddy discovers published firmware anonymously from this repository's latest
-public GitHub Release. It accepts only `xc-buddy-sticks3-ota.bin`, verifies the
-GitHub asset size and SHA-256 digest, and then transfers it through this BLE OTA
-channel. The merged image remains restricted to manual USB flashing.
+public GitHub Release. The release tag identifies the app version; the verified
+`xc-buddy-sticks3-firmware.json` asset identifies the independent firmware
+version and names `xc-buddy-sticks3-ota.bin`. XC Buddy verifies both GitHub
+asset sizes and SHA-256 digests before transferring the OTA image. The merged
+image remains restricted to manual USB flashing.
 
 The 8 MB flash layout uses two 3 MB OTA app slots and keeps the remaining flash as a reserved SPIFFS data partition:
 
@@ -271,7 +276,7 @@ activity turns the display back on. The front button wakes the device from deep
 sleep. XC Buddy retains only the latest persistent lifecycle state while the
 Stick sleeps; transient completion and error notices are not replayed.
 
-macOS:
+Desktop app:
 
 ```text
 needs_pairing -> scanning -> ready -> recording -> thinking -> pending_confirmation -> ready

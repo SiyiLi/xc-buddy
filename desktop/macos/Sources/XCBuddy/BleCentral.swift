@@ -66,6 +66,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var discoveredDevices: [UUID: ConnectedXCDevice] = [:]
     private var connectedDevices: [UUID: ConnectedXCDevice] = [:]
+    private var connectingPeripheralID: UUID?
     private var controlCharacteristics: [UUID: CBCharacteristic] = [:]
     private var otaCharacteristics: [UUID: CBCharacteristic] = [:]
     private var firmwareUpdateSession: FirmwareUpdateSession?
@@ -146,6 +147,7 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         peripherals.removeAll()
         discoveredDevices.removeAll()
         connectedDevices.removeAll()
+        connectingPeripheralID = nil
         controlCharacteristics.removeAll()
         otaCharacteristics.removeAll()
         failFirmwareUpdate(FirmwareUpdateError.noConnectedDevice)
@@ -387,6 +389,10 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         guard !isWorkspaceSleeping, !isStopping else { return }
+        guard connectedDevices.isEmpty, connectingPeripheralID == nil else {
+            central.stopScan()
+            return
+        }
         guard shouldConnect(localName: localName, peripheralName: peripheral.name) else { return }
         if let existingPeripheral = peripherals[peripheral.identifier] {
             if existingPeripheral.state == .disconnected {
@@ -400,14 +406,23 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
         peripherals[peripheral.identifier] = peripheral
         peripheral.delegate = self
+        connectingPeripheralID = peripheral.identifier
+        central.stopScan()
         central.connect(peripheral)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         guard !isStopping else {
             central.cancelPeripheralConnection(peripheral)
+            removePeripheral(peripheral)
             return
         }
+        guard connectedDevices.isEmpty else {
+            central.cancelPeripheralConnection(peripheral)
+            removePeripheral(peripheral)
+            return
+        }
+        connectingPeripheralID = nil
         connectedDevices[peripheral.identifier] = discoveredDevices[peripheral.identifier]
             ?? connectedDevice(localName: nil, peripheralName: peripheral.name)
         central.stopScan()
@@ -629,6 +644,10 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             central.stopScan()
             return
         }
+        guard connectingPeripheralID == nil else {
+            central.stopScan()
+            return
+        }
         if pairedDeviceIDs.isEmpty {
             central.stopScan()
         } else {
@@ -638,12 +657,16 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     private func restoreConnectedPeripherals() {
-        guard let central, central.state == .poweredOn, !isWorkspaceSleeping, !pairedDeviceIDs.isEmpty else { return }
+        guard let central,
+              central.state == .poweredOn,
+              !isWorkspaceSleeping,
+              !pairedDeviceIDs.isEmpty,
+              connectedDevices.isEmpty,
+              connectingPeripheralID == nil else { return }
         let serviceUUID = CBUUID(string: BleProtocol.serviceUUID)
         let restoredPeripherals = central.retrieveConnectedPeripherals(withServices: [serviceUUID])
         guard !restoredPeripherals.isEmpty else { return }
 
-        var didRestore = false
         for peripheral in restoredPeripherals {
             guard let device = knownDevice(for: peripheral) else {
                 continue
@@ -653,10 +676,9 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             peripherals[peripheral.identifier] = peripheral
             peripheral.delegate = self
             peripheral.discoverServices([serviceUUID])
-            didRestore = true
-        }
-        if didRestore {
+            central.stopScan()
             onConnectionChange?(currentConnectedDevices)
+            return
         }
     }
 
@@ -684,12 +706,16 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         peripherals.removeAll()
         discoveredDevices.removeAll()
         connectedDevices.removeAll()
+        connectingPeripheralID = nil
         controlCharacteristics.removeAll()
         otaCharacteristics.removeAll()
         onConnectionChange?([])
     }
 
     private func removePeripheral(_ peripheral: CBPeripheral) {
+        if connectingPeripheralID == peripheral.identifier {
+            connectingPeripheralID = nil
+        }
         peripherals.removeValue(forKey: peripheral.identifier)
         discoveredDevices.removeValue(forKey: peripheral.identifier)
         connectedDevices.removeValue(forKey: peripheral.identifier)

@@ -13,6 +13,7 @@ final class SettingsWindowController: NSWindowController {
     private let debugAudioButton = NSButton(checkboxWithTitle: "Save debug audio files", target: nil, action: nil)
     private let debugAudioDirectoryField = NSTextField()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let versionLabel = NSTextField(labelWithString: "")
     private let codexBridgePortField = NSTextField()
     private let codexSuccessChimeButton = NSButton(
         checkboxWithTitle: "Play on Stick when Codex finishes",
@@ -68,7 +69,7 @@ final class SettingsWindowController: NSWindowController {
         let tabView = NSTabView()
         tabView.translatesAutoresizingMaskIntoConstraints = false
         tabView.addTabViewItem(makeTab(title: "AI Services") { stack in
-            stack.addArrangedSubview(self.sectionTitle("NVIDIA Transcription"))
+            stack.addArrangedSubview(self.sectionTitle("Transcription"))
             stack.addArrangedSubview(self.row(label: "API Key", control: self.apiKeyField))
             stack.addArrangedSubview(self.row(label: "Base URL", control: self.openAIBaseURLField))
             stack.addArrangedSubview(self.row(label: "Model", control: self.openAIModelField))
@@ -116,11 +117,14 @@ final class SettingsWindowController: NSWindowController {
         buttonRow.alignment = .centerY
         buttonRow.spacing = 10
         let openFolderButton = NSButton(title: "Open Config Folder", target: self, action: #selector(openConfigFolder))
+        versionLabel.stringValue = "Version: \(Self.applicationVersion)"
+        versionLabel.textColor = .secondaryLabelColor
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
         saveButton.keyEquivalent = "\r"
         buttonRow.addArrangedSubview(openFolderButton)
+        buttonRow.addArrangedSubview(versionLabel)
         buttonRow.addArrangedSubview(statusLabel)
         buttonRow.addArrangedSubview(spacer)
         buttonRow.addArrangedSubview(saveButton)
@@ -397,5 +401,9 @@ final class SettingsWindowController: NSWindowController {
         row.addArrangedSubview(spacer)
         row.addArrangedSubview(label)
         return row
+    }
+
+    private static var applicationVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "Unknown"
     }
 }

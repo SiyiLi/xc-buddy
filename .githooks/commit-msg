@@ -1,0 +1,78 @@
+#!/bin/sh
+set -eu
+
+msg_file=$1
+
+awk '
+function trim(s) {
+  gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+  return s
+}
+function fail(msg) {
+  print "Commit message gate failed: " msg > "/dev/stderr"
+  failed = 1
+}
+NR == 1 {
+  subject = trim($0)
+  if (subject == "") {
+    fail("subject is empty")
+  }
+  if (length($0) > 72) {
+    fail("subject is " length($0) " chars; max is 72")
+  }
+}
+NR == 2 && $0 != "" {
+  fail("line 2 must be empty between subject and body")
+}
+NR >= 3 {
+  if (trim($0) == "") {
+    if (!body_seen) {
+      fail("body starts with an empty line")
+    }
+    if (prev_empty) {
+      fail("repeated empty body lines")
+    }
+    if (paragraph_lines < 2) {
+      paragraph_number = paragraph_count + 1
+      fail("body paragraph " paragraph_number \
+           " has " paragraph_lines " content line; min is 2")
+    }
+    paragraph_count += 1
+    paragraph_lines = 0
+    prev_empty = 1
+    next
+  }
+
+  body_seen = 1
+  prev_empty = 0
+  paragraph_lines += 1
+  if (length($0) > 76) {
+    fail("body line " NR " is " length($0) " chars; max is 76")
+  }
+  meaningful_lines += 1
+  meaningful_chars += length(trim($0))
+}
+END {
+  if (NR == 0) {
+    fail("message is empty")
+  }
+  if (!body_seen) {
+    fail("body is empty")
+  }
+  if (prev_empty) {
+    fail("body ends with an empty line")
+  }
+  if (paragraph_count > 0 && paragraph_lines < 2) {
+    paragraph_number = paragraph_count + 1
+    fail("body paragraph " paragraph_number \
+         " has " paragraph_lines " content line; min is 2")
+  }
+  if (meaningful_lines < 3) {
+    fail("body has " meaningful_lines " meaningful lines; min is 3")
+  }
+  if (meaningful_chars < 160) {
+    fail("body has " meaningful_chars " meaningful chars; min is 160")
+  }
+  exit failed ? 1 : 0
+}
+' "$msg_file"

@@ -3,6 +3,7 @@ import Foundation
 
 struct FirmwareRelease {
     static let supportedHardware = "stick_s3"
+    static let manifestAssetName = "xc-buddy-sticks3-firmware.json"
     static let otaAssetName = "xc-buddy-sticks3-ota.bin"
 
     let version: String
@@ -77,6 +78,12 @@ final class FirmwareReleaseClient {
     enum FirmwareReleaseError: LocalizedError {
         case invalidResponse
         case noPublishedRelease
+        case missingManifestAsset
+        case missingManifestDigest
+        case manifestDownloadFailed
+        case manifestSizeMismatch
+        case manifestChecksumMismatch
+        case invalidManifest
         case missingOTAAsset
         case missingDigest
         case checksumMismatch
@@ -88,6 +95,18 @@ final class FirmwareReleaseClient {
                 return "GitHub returned an invalid firmware release response."
             case .noPublishedRelease:
                 return "No published firmware release is available yet."
+            case .missingManifestAsset:
+                return "The latest release does not contain the StickS3 firmware manifest."
+            case .missingManifestDigest:
+                return "The firmware manifest does not include a SHA-256 digest."
+            case .manifestDownloadFailed:
+                return "Could not download the firmware manifest from GitHub."
+            case .manifestSizeMismatch:
+                return "The downloaded firmware manifest size does not match GitHub."
+            case .manifestChecksumMismatch:
+                return "The downloaded firmware manifest checksum does not match GitHub."
+            case .invalidManifest:
+                return "The firmware manifest is invalid."
             case .missingOTAAsset:
                 return "The latest release does not contain the StickS3 OTA image."
             case .missingDigest:
@@ -115,12 +134,18 @@ final class FirmwareReleaseClient {
             }
         }
 
-        let tagName: String
         let assets: [Asset]
+    }
+
+    private struct FirmwareManifest: Decodable {
+        let hardware: String
+        let version: String
+        let otaAsset: String
 
         enum CodingKeys: String, CodingKey {
-            case tagName = "tag_name"
-            case assets
+            case hardware
+            case version
+            case otaAsset = "ota_asset"
         }
     }
 
@@ -157,25 +182,93 @@ final class FirmwareReleaseClient {
 
             do {
                 let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
-                guard let asset = release.assets.first(where: { $0.name == FirmwareRelease.otaAssetName }) else {
+                guard let manifestAsset = release.assets.first(where: {
+                    $0.name == FirmwareRelease.manifestAssetName
+                }) else {
+                    completion(.failure(FirmwareReleaseError.missingManifestAsset))
+                    return
+                }
+                guard let manifestDigest = manifestAsset.digest?.lowercased(),
+                      manifestDigest.hasPrefix("sha256:") else {
+                    completion(.failure(FirmwareReleaseError.missingManifestDigest))
+                    return
+                }
+                guard let otaAsset = release.assets.first(where: {
+                    $0.name == FirmwareRelease.otaAssetName
+                }) else {
                     completion(.failure(FirmwareReleaseError.missingOTAAsset))
                     return
                 }
-                guard let digest = asset.digest?.lowercased(), digest.hasPrefix("sha256:") else {
+                guard let otaDigest = otaAsset.digest?.lowercased(),
+                      otaDigest.hasPrefix("sha256:") else {
                     completion(.failure(FirmwareReleaseError.missingDigest))
                     return
                 }
-                let version = release.tagName.lowercased().hasPrefix("v")
-                    ? String(release.tagName.dropFirst())
-                    : release.tagName
-                completion(.success(FirmwareRelease(
-                    version: version,
-                    otaURL: asset.browserDownloadURL,
-                    otaSHA256: String(digest.dropFirst("sha256:".count)),
-                    otaSize: asset.size
-                )))
+                self.downloadManifest(
+                    from: manifestAsset,
+                    sha256: String(manifestDigest.dropFirst("sha256:".count))
+                ) { result in
+                    switch result {
+                    case .failure(let error):
+                        completion(.failure(error))
+                    case .success(let manifest):
+                        let version = manifest.version.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
+                        guard manifest.hardware == FirmwareRelease.supportedHardware,
+                              manifest.otaAsset == FirmwareRelease.otaAssetName,
+                              !version.isEmpty else {
+                            completion(.failure(FirmwareReleaseError.invalidManifest))
+                            return
+                        }
+                        completion(.success(FirmwareRelease(
+                            version: version,
+                            otaURL: otaAsset.browserDownloadURL,
+                            otaSHA256: String(otaDigest.dropFirst("sha256:".count)),
+                            otaSize: otaAsset.size
+                        )))
+                    }
+                }
             } catch {
                 completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    private func downloadManifest(
+        from asset: GitHubRelease.Asset,
+        sha256: String,
+        completion: @escaping (Result<FirmwareManifest, Error>) -> Void
+    ) {
+        var request = URLRequest(
+            url: asset.browserDownloadURL,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
+        )
+        request.setValue("XC-Buddy", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard error == nil,
+                  let data,
+                  let response = response as? HTTPURLResponse,
+                  (200..<300).contains(response.statusCode) else {
+                completion(.failure(FirmwareReleaseError.manifestDownloadFailed))
+                return
+            }
+            guard data.count == asset.size else {
+                completion(.failure(FirmwareReleaseError.manifestSizeMismatch))
+                return
+            }
+            let digest = SHA256.hash(data: data)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            guard digest == sha256 else {
+                completion(.failure(FirmwareReleaseError.manifestChecksumMismatch))
+                return
+            }
+            do {
+                completion(.success(try JSONDecoder().decode(FirmwareManifest.self, from: data)))
+            } catch {
+                completion(.failure(FirmwareReleaseError.invalidManifest))
             }
         }.resume()
     }
