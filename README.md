@@ -287,10 +287,9 @@ generate_keys="$(find -L desktop/macos/.build-arm64/artifacts \
 
 When only Command Line Tools are selected, the debug package targets the host
 architecture because recent arm64-only Swift compatibility archives cannot
-cross-link an x86_64 executable. Release builds remain universal and require a
-toolchain that supports both arm64 and x86_64 by default. A local release test
-on an Apple silicon Mac may set `XC_BUDDY_ARCHS=arm64`; published release
-artifacts must remain universal.
+cross-link an x86_64 executable. Current private macOS releases target Apple
+silicon by setting `XC_BUDDY_ARCHS=arm64`. A universal build requires a
+toolchain that supports both arm64 and x86_64.
 
 The tool stores the private key in the login Keychain and prints the public
 key. Back up the private key using Sparkle's documented export command. Do not

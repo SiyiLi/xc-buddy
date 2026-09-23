@@ -5,5 +5,24 @@
     <link>https://github.com/SiyiLi/xc-buddy/</link>
     <description>XC Buddy app updates</description>
     <language>zh-CN</language>
+    <item>
+      <title>Version 0.2.3</title>
+      <description><![CDATA[
+        <ul>
+          <li>Adds the reviewed macOS update controls.</li><li>Keeps Settings width stable and prevents menu bar flicker.</li><li>Improves signed macOS release packaging.</li>
+        </ul>
+      ]]></description>
+      <pubDate>Wed, 23 Sep 2026 09:49:59 +0000</pubDate>
+      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/SiyiLi/xc-buddy/releases/download/app-v0.2.3/XC-Buddy-0.2.3.zip"
+        sparkle:os="macos"
+        sparkle:version="0.2.3"
+        sparkle:shortVersionString="0.2.3"
+        sparkle:edSignature="kn1lNGJeWmxAYR871q6F+c6cX4yZ+JmTtMTKgS0SXz9x1FBGBJT0K3oc3CqYbmTMJqSGiuAlELrOfql1Y4weAg=="
+        length="3341034"
+        type="application/octet-stream"
+      />
+    </item>
   </channel>
 </rss>
