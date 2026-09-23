@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindowController: OnboardingWindowController?
     private var firmwareUpdateWindowController: FirmwareUpdateWindowController?
     private var updaterController: SPUStandardUpdaterController?
-    private var dockIconWindowIDs = Set<ObjectIdentifier>()
     private var config = AppConfig.defaults
     private var isPreparingToTerminate = false
 
@@ -99,7 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusController?.setDeviceOutputProfiles(config.deviceOutputProfiles)
                 self?.coordinator?.updateConfig(config)
             }
-            self?.showDockIconWhileWindowVisible(controller)
             controller.show()
         }
         statusController.onPairDevice = { [weak self] in
@@ -256,7 +254,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.startApp(config: config)
         }
         onboardingWindowController = controller
-        showDockIconWhileWindowVisible(controller)
         controller.show()
     }
 
@@ -293,7 +290,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         pairDeviceWindowController = controller
-        showDockIconWhileWindowVisible(controller)
         controller.show()
     }
 
@@ -303,7 +299,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.coordinator?.cancelFirmwareUpdate()
         }
         firmwareUpdateWindowController = updateWindow
-        showDockIconWhileWindowVisible(updateWindow)
         updateWindow.show()
 
         coordinator?.updateFirmwareFromLatest(for: deviceID, progress: { [weak self] progress in
@@ -315,41 +310,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.firmwareUpdateWindowController?.finish(result: result)
             }
         })
-    }
-
-    private func showDockIconWhileWindowVisible(_ windowController: NSWindowController) {
-        configureApplicationIcon()
-        NSApp.setActivationPolicy(.regular)
-        configureApplicationIcon()
-        guard let window = windowController.window else { return }
-        dockIconWindowIDs.insert(ObjectIdentifier(window))
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowWillCloseForDockIcon),
-            name: NSWindow.willCloseNotification,
-            object: window
-        )
-    }
-
-    @objc private func windowWillCloseForDockIcon(_ notification: Notification) {
-        if let window = notification.object as? NSWindow {
-            dockIconWindowIDs.remove(ObjectIdentifier(window))
-        }
-        NotificationCenter.default.removeObserver(
-            self,
-            name: NSWindow.willCloseNotification,
-            object: notification.object
-        )
-        hideDockIconIfNoWindowsAreVisible()
-    }
-
-    private func hideDockIconIfNoWindowsAreVisible() {
-        DispatchQueue.main.async {
-            if self.dockIconWindowIDs.isEmpty {
-                NSApp.setActivationPolicy(.accessory)
-            }
-        }
     }
 
     private static func applicationIconImage() -> NSImage? {
