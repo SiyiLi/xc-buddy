@@ -7,7 +7,7 @@ import re
 import tkinter as tk
 from functools import partial
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, cast
 
 from .bluetooth import ConnectedXCDevice
 from .gtk_layout import present_from_tray
@@ -1127,7 +1127,7 @@ class DesktopUI:
 
         def clear_content() -> None:
             for child in content.winfo_children():
-                child.pack_forget()
+                cast(tk.Widget, child).pack_forget()
 
         def desktop_access_ready() -> bool:
             missing = integration_missing()

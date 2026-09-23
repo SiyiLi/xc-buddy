@@ -737,31 +737,29 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
 class ServiceTests(unittest.TestCase):
     @mock.patch("app.services.urllib.request.urlopen")
-    def test_latest_app_release_uses_the_documented_github_redirect(self, urlopen):
+    def test_latest_app_release_uses_the_app_release_channel(self, urlopen):
         response = mock.MagicMock()
-        response.geturl.return_value = (
-            "https://github.com/SiyiLi/xc-buddy/releases/tag/v0.2.2"
-        )
+        response.read.return_value = json.dumps(
+            [
+                {"tag_name": "v0.1.7", "draft": False, "prerelease": False},
+                {"tag_name": "app-v0.2.2", "draft": False, "prerelease": True},
+            ]
+        ).encode()
         urlopen.return_value.__enter__.return_value = response
 
         self.assertEqual(services._latest_github_release_version(), "0.2.2")
         request = urlopen.call_args.args[0]
-        self.assertEqual(
-            request.full_url,
-            "https://github.com/SiyiLi/xc-buddy/releases/latest",
-        )
+        self.assertEqual(request.full_url, services.GITHUB_RELEASES_API_URL)
 
     @mock.patch("app.services.time.sleep")
     @mock.patch("app.services.urllib.request.urlopen")
     def test_latest_app_release_retries_a_transient_github_denial(self, urlopen, sleep):
         response = mock.MagicMock()
-        response.geturl.return_value = (
-            "https://github.com/SiyiLi/xc-buddy/releases/tag/v0.2.2"
-        )
+        response.read.return_value = b'[{"tag_name":"app-v0.2.2","draft":false}]'
         response.__enter__.return_value = response
         urlopen.side_effect = [
             services.urllib.error.HTTPError(
-                "https://github.com/SiyiLi/xc-buddy/releases/latest",
+                services.GITHUB_RELEASES_API_URL,
                 403,
                 "Forbidden",
                 {},
@@ -965,7 +963,7 @@ class ServiceTests(unittest.TestCase):
             release,
             AppRelease(
                 "0.2.2",
-                f"https://github.com/SiyiLi/xc-buddy/releases/download/v0.2.2/{name}",
+                f"https://github.com/SiyiLi/xc-buddy/releases/download/app-v0.2.2/{name}",
                 digest,
                 0,
                 name,

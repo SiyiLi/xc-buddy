@@ -19,6 +19,10 @@ from .config import AppConfig
 FIRMWARE_MANIFEST_ASSET = "xc-buddy-sticks3-firmware.json"
 FIRMWARE_OTA_ASSET = "xc-buddy-sticks3-ota.bin"
 GITHUB_REPOSITORY_URL = "https://github.com/SiyiLi/xc-buddy"
+GITHUB_RELEASES_API_URL = (
+    "https://api.github.com/repos/SiyiLi/xc-buddy/releases?per_page=20"
+)
+APP_RELEASE_TAG_PREFIX = "app-v"
 GITHUB_LOOKUP_ATTEMPTS = 3
 GITHUB_LOOKUP_RETRY_SECONDS = 0.5
 
@@ -349,15 +353,21 @@ def linux_release_asset_name(version: str) -> str:
 
 
 def _latest_github_release_version() -> str:
-    latest_url = f"{GITHUB_REPOSITORY_URL}/releases/latest"
-    request = urllib.request.Request(latest_url, headers={"User-Agent": "XC-Buddy"})
-    final_url = ""
+    request = urllib.request.Request(
+        GITHUB_RELEASES_API_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "XC-Buddy",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    response_data = b""
     last_error: Exception | None = None
     last_message = ""
     for attempt in range(GITHUB_LOOKUP_ATTEMPTS):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                final_url = response.geturl()
+                response_data = response.read()
             break
         except urllib.error.HTTPError as error:
             if error.code == 404:
@@ -373,24 +383,30 @@ def _latest_github_release_version() -> str:
             last_message = str(error)
         if attempt + 1 < GITHUB_LOOKUP_ATTEMPTS:
             time.sleep(GITHUB_LOOKUP_RETRY_SECONDS * (attempt + 1))
-    if not final_url:
+    if not response_data:
         raise ServiceError(
             f"Could not resolve the latest GitHub release: {last_message}"
         ) from last_error
 
-    parsed = urllib.parse.urlparse(final_url)
-    path_prefix = "/SiyiLi/xc-buddy/releases/tag/"
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc != "github.com"
-        or not parsed.path.startswith(path_prefix)
-    ):
-        raise ServiceError("GitHub returned an invalid latest release URL.")
-    tag = urllib.parse.unquote(parsed.path.removeprefix(path_prefix))
-    version = tag.removeprefix("v")
-    if not re.fullmatch(r"\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?", version):
-        raise ServiceError("GitHub returned an invalid latest release version.")
-    return version
+    try:
+        releases = json.loads(response_data.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ServiceError(
+            "GitHub returned an invalid app release response."
+        ) from error
+    if not isinstance(releases, list):
+        raise ServiceError("GitHub returned an invalid app release response.")
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft") is True:
+            continue
+        tag = release.get("tag_name")
+        if not isinstance(tag, str) or not tag.startswith(APP_RELEASE_TAG_PREFIX):
+            continue
+        version = tag.removeprefix(APP_RELEASE_TAG_PREFIX)
+        if not re.fullmatch(r"\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?", version):
+            raise ServiceError("GitHub returned an invalid app release version.")
+        return version
+    raise ServiceError("No published app release is available yet.")
 
 
 def latest_app_release(current_version: str | None = None) -> AppRelease:
@@ -401,7 +417,7 @@ def latest_app_release(current_version: str | None = None) -> AppRelease:
 
     archive_url = (
         f"{GITHUB_REPOSITORY_URL}/releases/download/"
-        f"v{urllib.parse.quote(version, safe='')}/{asset_name}"
+        f"{APP_RELEASE_TAG_PREFIX}{urllib.parse.quote(version, safe='')}/{asset_name}"
     )
     try:
         checksum = _request(f"{archive_url}.sha256", headers={"User-Agent": "XC-Buddy"})

@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 
 
-def ogg_crc(data: bytes) -> int:
+def ogg_crc(data: bytes | bytearray) -> int:
     crc = 0
     for value in data:
         crc ^= value << 24
