@@ -1,0 +1,65 @@
+name: Release Ubuntu app
+
+on:
+  push:
+    tags: ["app-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop/linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Validate app version
+        run: |
+          app_version="$(tr -d '[:space:]' < ../../VERSION)"
+          linux_version="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          test "$GITHUB_REF_NAME" = "app-v$app_version"
+          test "$linux_version" = "$app_version"
+
+      - name: Test Ubuntu app
+        run: |
+          python -m pip install --no-cache-dir -e .
+          dbus-run-session -- python -m unittest discover -s tests -v
+
+      - name: Build and install-test release archive
+        run: |
+          python scripts/build-user.py \
+            --build-env /tmp/xc-buddy-build-env \
+            --out-dir /tmp/xc-buddy-artifacts
+          artifact="$(find /tmp/xc-buddy-artifacts \
+            -mindepth 1 -maxdepth 1 -type d)"
+          python scripts/install-user.py "$artifact" \
+            --data-home /tmp/xc-buddy-data \
+            --config-home /tmp/xc-buddy-config \
+            --bin-dir /tmp/xc-buddy-bin
+          /tmp/xc-buddy-bin/xc-buddy --version
+          /tmp/xc-buddy-data/xc-buddy/current/venv/bin/python \
+            -m pip --no-cache-dir check
+
+      - name: Publish Ubuntu app release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="$(find /tmp/xc-buddy-artifacts -maxdepth 1 \
+            -name 'xc-buddy-linux-*.tar.gz' -type f)"
+          checksum="$archive.sha256"
+          test -f "$archive"
+          test -f "$checksum"
+          (cd /tmp/xc-buddy-artifacts && sha256sum \
+            --check "$(basename "$checksum")")
+          gh release create "$GITHUB_REF_NAME" "$archive" "$checksum" \
+            --verify-tag \
+            --prerelease \
+            --title "XC Buddy App ${GITHUB_REF_NAME#app-v} (Ubuntu)" \
+            --notes "Private-use Ubuntu application release."

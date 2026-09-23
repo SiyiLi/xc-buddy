@@ -360,11 +360,11 @@ desktop acceptance testing; direct source and editable-install launches are
 development tools, not acceptance builds.
 
 The builder also creates a runtime-specific release archive named like
-`xc-buddy-linux-x86_64-py310-0.2.2.tar.gz` plus its checksum. For public `v*`
-tags, the release workflow builds and attaches Python 3.10 and 3.12 archives
-automatically. This enables **Check for App Updates...** for either supported
-runtime on that Linux architecture. The installed app downloads the matching
-archive, verifies GitHub's SHA-256 digest and every internal artifact checksum,
+`xc-buddy-linux-x86_64-py310-0.2.2.tar.gz` plus its checksum. Pushing the
+matching `app-v0.2.2` tag builds, tests, and publishes that Python 3.10 archive.
+App releases use their own prerelease channel so GitHub's stable latest release
+continues to identify firmware. The installed app downloads the matching
+archive, verifies its release checksum and every internal artifact checksum,
 installs it as another immutable per-user release, switches the `current` link,
 and restarts through the stable launcher.
 
