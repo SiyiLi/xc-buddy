@@ -1,5 +1,5 @@
 #!/bin/bash
-# Package XC Buddy.app into a signed and optionally notarized DMG.
+# Package an already-signed XC Buddy.app into an optionally notarized DMG.
 #
 # Usage:
 #   scripts/make-dmg.sh
@@ -22,22 +22,7 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
-CODESIGN_IDENTITY="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
-    CODESIGN_IDENTITY="$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')"
-fi
-
-echo "Signing app before DMG packaging..."
-xattr -cr "$APP_PATH" 2>/dev/null || true
-if [ "$CODESIGN_IDENTITY" != "-" ]; then
-    echo "Using: $CODESIGN_IDENTITY"
-    codesign --deep --force --options runtime --sign "$CODESIGN_IDENTITY" "$APP_PATH"
-else
-    echo "Using ad-hoc signature."
-    codesign --deep --force --options runtime --sign - "$APP_PATH"
-fi
-
-echo "Verifying app signature..."
+echo "Verifying the existing app signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 rm -rf "$STAGING_DIR" "$OUTPUT"
@@ -54,12 +39,14 @@ hdiutil create \
     "$OUTPUT"
 rm -rf "$STAGING_DIR"
 
-if xcrun notarytool history --keychain-profile "AC_PASSWORD" >/dev/null 2>&1; then
+if codesign -dv --verbose=4 "$APP_PATH" 2>&1 | \
+    grep -q '^Authority=Developer ID Application:' && \
+    xcrun notarytool history --keychain-profile "AC_PASSWORD" >/dev/null 2>&1; then
     echo "Submitting DMG for notarization..."
     xcrun notarytool submit "$OUTPUT" --keychain-profile "AC_PASSWORD" --wait
     xcrun stapler staple "$OUTPUT"
 else
-    echo "Skipping notarization: keychain profile AC_PASSWORD was not found."
+    echo "Skipping notarization: Developer ID signing or AC_PASSWORD is absent."
 fi
 
 echo "DMG complete: $OUTPUT"

@@ -11,7 +11,7 @@ let package = Package(
         .executable(name: "XCBuddy", targets: ["XCBuddy"])
     ],
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
         .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
     ],
     targets: [

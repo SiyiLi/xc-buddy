@@ -265,9 +265,62 @@ nohup /tmp/xc-buddy-swift-build/arm64-apple-macosx/debug/XCBuddy \
 
 The Swift target and executable are `XCBuddy`; the application and bundle
 identity are `XC Buddy` and `ai.xc.buddy`. This verifies the local debug
-executable; signed universal `.app`, ZIP, and DMG packaging through
-`scripts/build-macos.sh` and `scripts/make-dmg.sh` was not exercised in this
-test session.
+executable; universal application packaging must still be exercised on a Mac.
+
+##### Private macOS releases and automatic updates
+
+Private releases use an ad-hoc application signature and a Sparkle-signed ZIP.
+They do not require an Apple Developer ID, notarization credentials, or a DMG.
+On each Mac, the first downloaded installation must be approved once with
+**Privacy & Security > Open Anyway**. Sparkle verifies subsequent update ZIPs
+with a separate EdDSA key before installing them.
+
+Create the Sparkle key once on the release Mac. First run a debug package build
+so SwiftPM downloads Sparkle into the repository-local build directory:
+
+```sh
+scripts/build-macos.sh --debug
+generate_keys="$(find -L desktop/macos/.build-arm64/artifacts \
+  -name generate_keys -type f | head -1)"
+"$generate_keys"
+```
+
+The tool stores the private key in the login Keychain and prints the public
+key. Back up the private key using Sparkle's documented export command. Do not
+commit or print the private key. Supply the printed public key when producing a
+release build:
+
+```sh
+SPARKLE_PUBLIC_ED_KEY='<public key>' scripts/build-macos.sh --release
+```
+
+The release build defaults to the repository's HTTPS appcast, signs the app
+ad-hoc, signs each Sparkle nested component explicitly, verifies the complete
+bundle, and creates:
+
+```text
+build/XC-Buddy-<version>.app
+build/XC-Buddy-<version>.zip
+build/XC-Buddy-<version>.signature
+```
+
+It fails instead of producing a release when the public key, Sparkle signing
+tool, private Keychain key, or update signature is unavailable. Attach the ZIP
+to the corresponding app release, then pass its URL, byte length, and the
+contents of the `.signature` file to `scripts/update-appcast.py`. Commit and
+publish the resulting `website/public/appcast.xml` only after the release asset
+is available.
+
+Before accepting the update path, install one older ZIP on a real Mac, approve
+it once, and update it to a newer test version through **Check for App
+Updates...**. Verify the version and relaunch, then verify that Bluetooth and
+Accessibility permission still work and that recognized text can still be
+pasted. This physical test is required because ad-hoc signing may not preserve
+macOS privacy permissions across application updates.
+
+`scripts/make-dmg.sh` remains an optional public-distribution helper. It never
+re-signs the application; notarization runs only when the input already has a
+Developer ID signature and the `AC_PASSWORD` Keychain profile exists.
 
 #### Linux
 

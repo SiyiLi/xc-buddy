@@ -10,7 +10,7 @@
 #   XC_BUDDY_APPCAST_URL=https://raw.githubusercontent.com/SiyiLi/xc-buddy/main/website/public/appcast.xml
 #   SPARKLE_PUBLIC_ED_KEY=<public key from Sparkle generate_keys>
 #   SPARKLE_PRIVATE_ED_KEY=<private key exported by Sparkle generate_keys -x>
-#   SPARKLE_KEY_ACCOUNT=xc-buddy
+#   CODESIGN_IDENTITY=<Developer ID identity; defaults to ad-hoc signing>
 
 set -euo pipefail
 
@@ -22,14 +22,17 @@ PLIST="$DESKTOP_DIR/Sources/XCBuddy/Info.plist"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 CONFIG="${1:---release}"
 TARGET_ARCHS="arm64 x86_64"
-SPARKLE_KEY_ACCOUNT="${SPARKLE_KEY_ACCOUNT:-xc-buddy}"
+DEFAULT_APPCAST_URL="https://raw.githubusercontent.com/SiyiLi/xc-buddy/main/website/public/appcast.xml"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 case "$CONFIG" in
     --release)
         SWIFT_CONFIG="release"
+        REQUIRE_UPDATE_SIGNATURE=1
         ;;
     --debug)
         SWIFT_CONFIG="debug"
+        REQUIRE_UPDATE_SIGNATURE=0
         ;;
     *)
         echo "Usage: $0 [--release|--debug]"
@@ -42,26 +45,28 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
+APPCAST_URL="${XC_BUDDY_APPCAST_URL:-$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST")}"
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_ED_KEY:-$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST")}"
+APPCAST_URL="${APPCAST_URL:-$DEFAULT_APPCAST_URL}"
+
+if [ "$REQUIRE_UPDATE_SIGNATURE" -eq 1 ]; then
+    if [[ "$APPCAST_URL" != https://* ]]; then
+        echo "Error: a release build requires an HTTPS Sparkle appcast URL."
+        exit 1
+    fi
+    if ! [[ "$SPARKLE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+        echo "Error: a release build requires a valid SPARKLE_PUBLIC_ED_KEY."
+        echo "Generate it once with Sparkle's generate_keys tool."
+        exit 1
+    fi
+fi
+
 mkdir -p "$BUILD_DIR"
 
 echo "===================================="
 echo " XC Buddy macOS Build v$VERSION"
 echo " Universal Binary: $TARGET_ARCHS"
 echo "===================================="
-
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
-
-if [ -n "${XC_BUDDY_APPCAST_URL:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Set :SUFeedURL $XC_BUDDY_APPCAST_URL" "$PLIST"
-fi
-
-if [ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" "$PLIST"
-elif /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$PLIST" | grep -q "REPLACE_WITH"; then
-    echo "WARNING: SUPublicEDKey is still a placeholder."
-    echo "         Generate Sparkle keys before shipping a public release."
-fi
 
 for ARCH in $TARGET_ARCHS; do
     echo ""
@@ -90,6 +95,13 @@ lipo -create \
     -output "$APP_DIR/Contents/MacOS/XCBuddy"
 
 cp "$PLIST" "$APP_DIR/Contents/Info.plist"
+BUNDLED_PLIST="$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$BUNDLED_PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$BUNDLED_PLIST"
+/usr/libexec/PlistBuddy -c "Set :SUFeedURL $APPCAST_URL" "$BUNDLED_PLIST"
+if [ -n "$SPARKLE_PUBLIC_KEY" ]; then
+    /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_KEY" "$BUNDLED_PLIST"
+fi
 
 ICON_PATH="$DESKTOP_DIR/Resources/AppIcon.icns"
 if [ -f "$ICON_PATH" ]; then
@@ -100,39 +112,45 @@ fi
 
 SPARKLE_FRAMEWORK="$(find -L "$DESKTOP_DIR/.build-arm64/artifacts" -name Sparkle.framework -type d 2>/dev/null | head -1 || true)"
 if [ -n "$SPARKLE_FRAMEWORK" ]; then
-    cp -R "$SPARKLE_FRAMEWORK" "$APP_DIR/Contents/Frameworks/"
+    ditto "$SPARKLE_FRAMEWORK" "$APP_DIR/Contents/Frameworks/Sparkle.framework"
     install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP_DIR/Contents/MacOS/XCBuddy" 2>/dev/null || true
 else
-    echo "WARNING: Sparkle.framework was not found in SwiftPM artifacts."
+    echo "Error: Sparkle.framework was not found in SwiftPM artifacts."
+    exit 1
 fi
 
-CODESIGN_IDENTITY="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
-    CODESIGN_IDENTITY="$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')"
+SIGN_OPTIONS=()
+if [ "$CODESIGN_IDENTITY" != "-" ]; then
+    SIGN_OPTIONS+=(--options runtime --timestamp)
 fi
+
+sign_code() {
+    local path="$1"
+    shift
+    if [ -e "$path" ]; then
+        codesign --force "${SIGN_OPTIONS[@]}" "$@" \
+            --sign "$CODESIGN_IDENTITY" "$path"
+    fi
+}
 
 echo ""
 echo "Signing app..."
 xattr -cr "$APP_DIR" 2>/dev/null || true
-if [ "$CODESIGN_IDENTITY" != "-" ]; then
-    echo "Using: $CODESIGN_IDENTITY"
-    codesign --deep --force --options runtime --sign "$CODESIGN_IDENTITY" "$APP_DIR"
-else
+if [ "$CODESIGN_IDENTITY" = "-" ]; then
     echo "Using ad-hoc signature."
-    # Sparkle binaries arrive signed by its publisher. A local ad-hoc app must
-    # re-sign all nested code so dyld sees one consistent signing identity.
-    if [ -d "$APP_DIR/Contents/Frameworks/Sparkle.framework" ]; then
-        while IFS= read -r -d '' nested; do
-            codesign --force --deep --sign - "$nested"
-        done < <(find "$APP_DIR/Contents/Frameworks/Sparkle.framework" -type d \
-            \( -name '*.xpc' -o -name '*.app' \) -print0)
-        while IFS= read -r -d '' binary; do
-            codesign --force --sign - "$binary" 2>/dev/null || true
-        done < <(find "$APP_DIR/Contents/Frameworks/Sparkle.framework" -type f -perm -111 -print0)
-        codesign --force --deep --sign - "$APP_DIR/Contents/Frameworks/Sparkle.framework"
-    fi
-    codesign --force --deep --sign - "$APP_DIR"
+else
+    echo "Using: $CODESIGN_IDENTITY"
 fi
+
+SPARKLE_BUNDLE="$APP_DIR/Contents/Frameworks/Sparkle.framework"
+SPARKLE_VERSION="$SPARKLE_BUNDLE/Versions/B"
+sign_code "$SPARKLE_VERSION/XPCServices/Installer.xpc"
+sign_code "$SPARKLE_VERSION/XPCServices/Downloader.xpc" \
+    --preserve-metadata=entitlements
+sign_code "$SPARKLE_VERSION/Autoupdate"
+sign_code "$SPARKLE_VERSION/Updater.app"
+sign_code "$SPARKLE_BUNDLE"
+sign_code "$APP_DIR"
 
 echo "Verifying app signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
@@ -150,22 +168,31 @@ ditto -c -k --norsrc --noextattr --keepParent "$STAGING_DIR/XC Buddy.app" "$ZIP_
 rm -rf "$STAGING_DIR"
 
 SIGN_TOOL="$(find -L "$DESKTOP_DIR/.build-arm64/artifacts" -name sign_update -type f 2>/dev/null | head -1 || true)"
-if [ -n "$SIGN_TOOL" ] && [ -x "$SIGN_TOOL" ]; then
+if [ "$REQUIRE_UPDATE_SIGNATURE" -eq 1 ]; then
+    if [ -z "$SIGN_TOOL" ] || [ ! -x "$SIGN_TOOL" ]; then
+        echo "Error: Sparkle sign_update tool was not found."
+        exit 1
+    fi
     echo "Signing Sparkle ZIP..."
     if [ -n "${SPARKLE_PRIVATE_ED_KEY:-}" ]; then
-        SIGN_OUTPUT="$(printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | "$SIGN_TOOL" --ed-key-file - "$ZIP_PATH" 2>&1 || true)"
+        if ! SIGN_OUTPUT="$(printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | "$SIGN_TOOL" --ed-key-file - "$ZIP_PATH" 2>&1)"; then
+            echo "Error: Sparkle could not sign the update archive."
+            echo "$SIGN_OUTPUT"
+            exit 1
+        fi
     else
-        SIGN_OUTPUT="$("$SIGN_TOOL" --account "$SPARKLE_KEY_ACCOUNT" "$ZIP_PATH" 2>&1 || true)"
+        if ! SIGN_OUTPUT="$("$SIGN_TOOL" "$ZIP_PATH" 2>&1)"; then
+            echo "Error: Sparkle could not sign the update archive."
+            echo "$SIGN_OUTPUT"
+            exit 1
+        fi
     fi
-    echo "$SIGN_OUTPUT"
     ED_SIGNATURE="$(printf '%s\n' "$SIGN_OUTPUT" | sed -nE 's/.*sparkle:edSignature="([^"]+)".*/\1/p' | head -1)"
-    if [ -n "$ED_SIGNATURE" ]; then
-        printf '%s\n' "$ED_SIGNATURE" > "$SIGNATURE_PATH"
-    else
-        printf '%s\n' "$SIGN_OUTPUT" > "$SIGNATURE_PATH"
+    if ! [[ "$ED_SIGNATURE" =~ ^[A-Za-z0-9+/]{86}==$ ]]; then
+        echo "Error: Sparkle returned an invalid EdDSA signature."
+        exit 1
     fi
-else
-    echo "WARNING: Sparkle sign_update tool was not found."
+    printf '%s\n' "$ED_SIGNATURE" > "$SIGNATURE_PATH"
 fi
 
 echo ""
@@ -176,4 +203,8 @@ if [ -f "$SIGNATURE_PATH" ]; then
     echo "  Sig: $SIGNATURE_PATH"
 fi
 echo ""
-echo "Next: $SCRIPT_DIR/make-dmg.sh $APP_DIR"
+if [ "$REQUIRE_UPDATE_SIGNATURE" -eq 1 ]; then
+    echo "Next: attach the ZIP to the app release and update the appcast."
+else
+    echo "Debug builds do not produce a signed Sparkle update."
+fi
