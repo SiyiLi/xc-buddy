@@ -1,0 +1,35 @@
+name: macOS test app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/macos/**"
+      - "scripts/build-macos.sh"
+      - "VERSION"
+      - ".github/workflows/macos-test-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build installable test app
+        run: scripts/build-macos.sh --debug
+      - name: Record archive checksum
+        run: |
+          cd build
+          shasum -a 256 XC-Buddy-*.zip > XC-Buddy-test.zip.sha256
+      - name: Upload test app
+        uses: actions/upload-artifact@v4
+        with:
+          name: xc-buddy-macos-test
+          path: |
+            build/XC-Buddy-*.zip
+            build/XC-Buddy-test.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

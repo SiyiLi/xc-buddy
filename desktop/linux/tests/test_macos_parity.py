@@ -143,9 +143,13 @@ class MacOSSourceParityTests(unittest.TestCase):
     def test_menu_actions_and_translation_catalog_are_exposed_on_linux(self):
         linux_directory = Path(__file__).resolve().parents[1] / "app"
         linux_source = "\n".join(
-            (linux_directory / name).read_text() for name in ("ui.py", "gtk_device.py")
+            (linux_directory / name).read_text()
+            for name in ("ui.py", "gtk_device.py", "gtk_settings.py")
         )
-        mac_source = (MACOS / "StatusController.swift").read_text()
+        mac_source = "\n".join(
+            (MACOS / name).read_text()
+            for name in ("StatusController.swift", "SettingsWindowController.swift")
+        )
         for title in (
             "Relay Mode",
             "Output",
@@ -169,8 +173,6 @@ class MacOSSourceParityTests(unittest.TestCase):
         self.assertIn("<key>SUPublicEDKey</key>\n\t<string></string>", mac_info)
         self.assertIn("Check for App Updates...", mac_source)
         self.assertIn("Check for App Updates...", linux_source)
-        self.assertIn("if onCheckForUpdates != nil", mac_source)
-        self.assertIn("if self.on_check_updates is not None", linux_source)
 
     def test_device_window_preserves_the_macos_device_menu_order(self):
         mac_source = (MACOS / "StatusController.swift").read_text()
@@ -529,7 +531,7 @@ class MacOSSourceParityTests(unittest.TestCase):
         self.assertIn("coordinator?.updateConfig(config)", forget_block)
         self.assertNotIn("coordinator?.updatePairedDeviceIDs", forget_block)
 
-    def test_settings_footer_exposes_the_same_version_label(self):
+    def test_settings_about_tab_exposes_the_same_version_label(self):
         mac_settings = (MACOS / "SettingsWindowController.swift").read_text()
         linux_settings = (
             Path(__file__).resolve().parents[1] / "app" / "gtk_settings.py"

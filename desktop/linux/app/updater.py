@@ -43,7 +43,10 @@ def standard_update_context() -> UpdateContext | None:
     if not launcher.is_file():
         return None
     config_home = Path(
-        os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+        os.environ.get(
+            "XC_BUDDY_CONFIG_HOME",
+            os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"),
+        )
     ).expanduser()
     return UpdateContext(
         data_home=data_root.parent,

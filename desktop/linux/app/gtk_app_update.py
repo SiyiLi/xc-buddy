@@ -13,10 +13,11 @@ async def confirm_app_update(
     latest_version: str,
     activation_time: int = 0,
     on_open: Callable[[Any], None] | None = None,
+    parent: Any | None = None,
 ) -> bool:
     Gtk = _gtk_module()
     dialog = Gtk.MessageDialog(
-        transient_for=None,
+        transient_for=parent,
         flags=Gtk.DialogFlags.MODAL,
         message_type=Gtk.MessageType.INFO,
         buttons=Gtk.ButtonsType.NONE,
@@ -44,10 +45,12 @@ async def confirm_app_update(
     return bool(await result)
 
 
-def show_update_message(title: str, detail: str, activation_time: int = 0) -> Any:
+def show_update_message(
+    title: str, detail: str, activation_time: int = 0, parent: Any | None = None
+) -> Any:
     Gtk = _gtk_module()
     dialog = Gtk.MessageDialog(
-        transient_for=None,
+        transient_for=parent,
         flags=Gtk.DialogFlags.MODAL,
         message_type=Gtk.MessageType.INFO,
         buttons=Gtk.ButtonsType.CLOSE,

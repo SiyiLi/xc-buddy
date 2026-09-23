@@ -285,6 +285,13 @@ generate_keys="$(find -L desktop/macos/.build-arm64/artifacts \
 "$generate_keys"
 ```
 
+When only Command Line Tools are selected, the debug package targets the host
+architecture because recent arm64-only Swift compatibility archives cannot
+cross-link an x86_64 executable. Release builds remain universal and require a
+toolchain that supports both arm64 and x86_64 by default. A local release test
+on an Apple silicon Mac may set `XC_BUDDY_ARCHS=arm64`; published release
+artifacts must remain universal.
+
 The tool stores the private key in the login Keychain and prints the public
 key. Back up the private key using Sparkle's documented export command. Do not
 commit or print the private key. Supply the printed public key when producing a

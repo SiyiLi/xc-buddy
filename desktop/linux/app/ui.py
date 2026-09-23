@@ -191,6 +191,8 @@ class DesktopUI:
             menu_api.MenuItem(lambda _i: f"Codex: {self._codex}", None, enabled=False),
             menu_api.MenuItem(lambda _i: self._relay_summary(), None, enabled=False),
             menu_api.Menu.SEPARATOR,
+            *device_items,
+            *([menu_api.Menu.SEPARATOR] if device_items else []),
             menu_api.MenuItem(
                 "Relay Mode",
                 menu_api.Menu(
@@ -210,20 +212,24 @@ class DesktopUI:
                     ]
                 ),
             ),
-            menu_api.Menu.SEPARATOR,
-            *(
-                [
-                    menu_api.MenuItem(
-                        "Restore Last Input",
-                        lambda _i, _item: self.call(self.on_restore),
-                    ),
-                    menu_api.Menu.SEPARATOR,
-                ]
-                if self._has_recoverable_input
-                else []
+            menu_api.MenuItem(
+                "Interaction",
+                menu_api.Menu(
+                    *[
+                        menu_api.MenuItem(
+                            label,
+                            self._menu_action(self.on_set_interaction, value),
+                            checked=lambda _item, value=value: bool(config)
+                            and config.interaction_mode == value,
+                            radio=True,
+                        )
+                        for value, label in (
+                            ("hold_to_talk", "Hold to Talk"),
+                            ("click_to_talk", "Click to Talk"),
+                        )
+                    ]
+                ),
             ),
-            *device_items,
-            *([menu_api.Menu.SEPARATOR] if device_items else []),
             menu_api.MenuItem(
                 "Output",
                 menu_api.Menu(
@@ -249,25 +255,18 @@ class DesktopUI:
                 ),
                 checked=lambda _item: bool(config and config.auto_enter),
             ),
-            menu_api.MenuItem(
-                "Interaction",
-                menu_api.Menu(
-                    *[
-                        menu_api.MenuItem(
-                            label,
-                            self._menu_action(self.on_set_interaction, value),
-                            checked=lambda _item, value=value: bool(config)
-                            and config.interaction_mode == value,
-                            radio=True,
-                        )
-                        for value, label in (
-                            ("hold_to_talk", "Hold to Talk"),
-                            ("click_to_talk", "Click to Talk"),
-                        )
-                    ]
-                ),
-            ),
             menu_api.Menu.SEPARATOR,
+            *(
+                [
+                    menu_api.MenuItem(
+                        "Restore Last Input",
+                        lambda _i, _item: self.call(self.on_restore),
+                    ),
+                    menu_api.Menu.SEPARATOR,
+                ]
+                if self._has_recoverable_input
+                else []
+            ),
             menu_api.MenuItem(
                 "Pair Device...",
                 lambda indicator, _item: self.call(
@@ -281,20 +280,6 @@ class DesktopUI:
                 ),
             ),
             menu_api.Menu.SEPARATOR,
-            menu_api.MenuItem("Website", lambda _i, _item: self.call(self.on_website)),
-            *(
-                [
-                    menu_api.MenuItem(
-                        "Check for App Updates...",
-                        lambda indicator, _item: self.call(
-                            self.on_check_updates,
-                            getattr(indicator, "activation_time", 0),
-                        ),
-                    )
-                ]
-                if self.on_check_updates is not None
-                else []
-            ),
             menu_api.MenuItem("Quit", lambda _i, _item: self.call(self.on_quit)),
         )
 
@@ -664,6 +649,7 @@ class DesktopUI:
             latest_version,
             activation_time,
             self._track_gtk_window,
+            self._settings_window,
         )
 
     def app_update_current(self, version: str, activation_time: int = 0) -> None:
@@ -674,6 +660,7 @@ class DesktopUI:
                 "You're up to date!",
                 f"XC Buddy {version} is currently the newest version available.",
                 activation_time,
+                self._settings_window,
             )
         )
 
@@ -692,7 +679,9 @@ class DesktopUI:
             self._app_update_window.fail(error)
             return
         self._track_gtk_window(
-            show_update_message("Update Failed", error, activation_time)
+            show_update_message(
+                "Update Failed", error, activation_time, self._settings_window
+            )
         )
 
     def app_update_restarting(self) -> None:
@@ -879,11 +868,8 @@ class DesktopUI:
             actions.pack_start(button, False, False, 0)
         page.pack_start(actions, False, False, 0)
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        website = Gtk.Button.new_with_label("Website")
-        website.connect("clicked", lambda _button: self.call(self.on_website))
         quit_button = Gtk.Button.new_with_label("Quit")
         quit_button.connect("clicked", lambda _button: self.call(self.on_quit))
-        footer.pack_start(website, False, False, 0)
         footer.pack_end(quit_button, False, False, 0)
         page.pack_end(footer, False, False, 0)
 
@@ -1353,11 +1339,18 @@ class DesktopUI:
             return
 
         logger.debug("Creating XC Buddy Settings window")
+        check_updates = self.on_check_updates
         window = show_settings(
-            config,
-            on_save,
-            lambda: self.call(self.on_open_config),
-            activation_time,
+            config=config,
+            on_save=on_save,
+            on_open_config=lambda: self.call(self.on_open_config),
+            on_website=lambda: self.call(self.on_website),
+            on_check_updates=(
+                (lambda timestamp: self.call(check_updates, timestamp))
+                if check_updates is not None
+                else None
+            ),
+            activation_time=activation_time,
         )
         self._settings_window = window
         logger.debug("XC Buddy Settings window presented")

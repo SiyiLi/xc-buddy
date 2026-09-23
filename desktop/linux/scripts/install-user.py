@@ -281,6 +281,7 @@ def install_launchers(
         "set -eu\n"
         "# XC Buddy managed launcher.\n"
         f"app_root={shlex.quote(str(data_root))}\n"
+        f"export XC_BUDDY_CONFIG_HOME={shlex.quote(str(config_home))}\n"
         'export XC_BUDDY_LAUNCHER="$0"\n'
         'export XC_BUDDY_BUILD_INFO="$app_root/current/build-info.json"\n'
         'exec "$app_root/current/venv/bin/xc-buddy" "$@"\n',

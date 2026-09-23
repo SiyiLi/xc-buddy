@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,7 @@ GITHUB_REPOSITORY_URL = "https://github.com/SiyiLi/xc-buddy"
 GITHUB_RELEASES_API_URL = (
     "https://api.github.com/repos/SiyiLi/xc-buddy/releases?per_page=20"
 )
+GITHUB_RELEASES_FEED_URL = f"{GITHUB_REPOSITORY_URL}/releases.atom"
 APP_RELEASE_TAG_PREFIX = "app-v"
 GITHUB_LOOKUP_ATTEMPTS = 3
 GITHUB_LOOKUP_RETRY_SECONDS = 0.5
@@ -384,6 +386,11 @@ def _latest_github_release_version() -> str:
         if attempt + 1 < GITHUB_LOOKUP_ATTEMPTS:
             time.sleep(GITHUB_LOOKUP_RETRY_SECONDS * (attempt + 1))
     if not response_data:
+        if isinstance(last_error, urllib.error.HTTPError) and last_error.code in (
+            403,
+            429,
+        ):
+            return _latest_app_release_from_feed()
         raise ServiceError(
             f"Could not resolve the latest GitHub release: {last_message}"
         ) from last_error
@@ -406,6 +413,28 @@ def _latest_github_release_version() -> str:
         if not re.fullmatch(r"\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?", version):
             raise ServiceError("GitHub returned an invalid app release version.")
         return version
+    raise ServiceError("No published app release is available yet.")
+
+
+def _latest_app_release_from_feed() -> str:
+    try:
+        feed = ET.fromstring(
+            _request(GITHUB_RELEASES_FEED_URL, headers={"User-Agent": "XC-Buddy"})
+        )
+    except ET.ParseError as error:
+        raise ServiceError("GitHub returned an invalid app release feed.") from error
+    namespace = "{http://www.w3.org/2005/Atom}"
+    for entry in feed.findall(f"{namespace}entry"):
+        link = entry.find(f"{namespace}link[@rel='alternate']")
+        if link is None:
+            continue
+        href = link.get("href", "")
+        prefix = f"{GITHUB_REPOSITORY_URL}/releases/tag/{APP_RELEASE_TAG_PREFIX}"
+        if not href.startswith(prefix):
+            continue
+        version = href.removeprefix(prefix)
+        if re.fullmatch(r"\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?", version):
+            return version
     raise ServiceError("No published app release is available yet.")
 
 

@@ -75,7 +75,12 @@ class AppConfig:
 
 
 def config_dir() -> Path:
-    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    base = Path(
+        os.environ.get(
+            "XC_BUDDY_CONFIG_HOME",
+            os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"),
+        )
+    )
     return base / "xc-buddy"
 
 

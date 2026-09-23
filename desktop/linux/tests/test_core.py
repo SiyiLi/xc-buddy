@@ -772,6 +772,30 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once_with(services.GITHUB_LOOKUP_RETRY_SECONDS)
 
+    @mock.patch("app.services.time.sleep")
+    @mock.patch("app.services.urllib.request.urlopen")
+    def test_latest_app_release_uses_feed_when_api_limit_is_exhausted(
+        self, urlopen, _sleep
+    ):
+        denied = services.urllib.error.HTTPError(
+            services.GITHUB_RELEASES_API_URL, 403, "Forbidden", {}, None
+        )
+        feed = mock.MagicMock()
+        feed.read.return_value = (
+            b'<feed xmlns="http://www.w3.org/2005/Atom">'
+            b'<entry><link rel="alternate" href="https://github.com/'
+            b'SiyiLi/xc-buddy/releases/tag/v0.1.7"/></entry>'
+            b'<entry><link rel="alternate" href="https://github.com/'
+            b'SiyiLi/xc-buddy/releases/tag/app-v0.2.2"/></entry></feed>'
+        )
+        feed.__enter__.return_value = feed
+        urlopen.side_effect = [denied, denied, denied, feed]
+
+        self.assertEqual(services._latest_github_release_version(), "0.2.2")
+        self.assertEqual(
+            urlopen.call_args.args[0].full_url, services.GITHUB_RELEASES_FEED_URL
+        )
+
     def test_firmware_version_order_matches_macos(self):
         self.assertTrue(version_is_older("v0.2.0", "0.2.1"))
         self.assertTrue(version_is_older("1.0-beta2", "1.0"))
@@ -1271,15 +1295,14 @@ class DesktopUITests(unittest.TestCase):
                 "Target: Focused App",
                 "Codex: Idle",
                 "Relay: Connected",
-                "Relay Mode",
-                "Restore Last Input",
                 "XC-ABCD",
+                "Relay Mode",
+                "Interaction",
                 "Output",
                 "Press Return After Paste",
-                "Interaction",
+                "Restore Last Input",
                 "Pair Device...",
                 "Settings...",
-                "Website",
                 "Quit",
             ],
         )
@@ -1290,22 +1313,10 @@ class DesktopUITests(unittest.TestCase):
         self.assertNotIsInstance(device_item.action, NativeMenu)
         device_index = menu.items.index(device_item)
         self.assertIs(menu.items[device_index + 1], NativeMenu.SEPARATOR)
-        self.assertEqual(menu.items[device_index + 2].text, "Output")
+        self.assertEqual(menu.items[device_index + 2].text, "Relay Mode")
         indicator = mock.Mock(activation_time=1234)
         device_item.action(indicator, device_item)
         ui.call.assert_called_once_with(ui._show_device_window, "ABCD", 1234)
-
-        ui.on_check_updates = mock.Mock()
-        update_menu = ui._menu(native_indicator)
-        update_item = next(
-            item
-            for item in update_menu.items
-            if isinstance(item, NativeMenuItem)
-            and item.text == "Check for App Updates..."
-        )
-        ui.call.reset_mock()
-        update_item.action(indicator, update_item)
-        ui.call.assert_called_once_with(ui.on_check_updates, 1234)
 
     def test_connected_device_name_and_paired_order_follow_macos(self):
         ui = DesktopUI.__new__(DesktopUI)

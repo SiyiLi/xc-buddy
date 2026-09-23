@@ -95,9 +95,6 @@ final class StatusController {
     var onSetDefaultOutputProfile: ((OutputProfile) -> Void)?
     var onSetDeviceOutputProfile: ((String, OutputProfile) -> Void)?
     var onSetRelayMode: ((RelayMode) -> Void)?
-    var onCheckForUpdates: (() -> Void)? {
-        didSet { rebuildMenu() }
-    }
     private var needsPairing: Bool
     private var hasRecoverableInput = false
     private var pairedDeviceIDs: [String]
@@ -215,8 +212,10 @@ final class StatusController {
         menu.removeAllItems()
         addRuntimeSummary()
         menu.addItem(NSMenuItem.separator())
+        addDeviceItems()
         addRelayModeItem()
-        menu.addItem(NSMenuItem.separator())
+        addInputItems()
+
         if hasRecoverableInput {
             menu.addItem(makeMenuItem(
                 title: "Restore Last Input",
@@ -225,10 +224,6 @@ final class StatusController {
             ))
             menu.addItem(NSMenuItem.separator())
         }
-
-        addDeviceItems()
-
-        addInputItems()
 
         menu.addItem(makeMenuItem(
             title: "Pair Device...",
@@ -244,21 +239,6 @@ final class StatusController {
         ))
 
         menu.addItem(NSMenuItem.separator())
-
-        menu.addItem(makeMenuItem(
-            title: "Website",
-            symbolName: "safari",
-            action: #selector(openWebsite)
-        ))
-
-        if onCheckForUpdates != nil {
-            menu.addItem(makeMenuItem(
-                title: "Check for App Updates...",
-                symbolName: "arrow.triangle.2.circlepath",
-                action: #selector(checkForUpdates)
-            ))
-        }
-
         menu.addItem(makeMenuItem(
             title: "Quit",
             symbolName: "power",
@@ -319,16 +299,6 @@ final class StatusController {
     }
 
     private func addInputItems() {
-        addOutputItems()
-
-        let afterPasteItem = makeMenuItem(
-            title: "Press Return After Paste",
-            symbolName: "return",
-            action: #selector(toggleAutoEnter)
-        )
-        afterPasteItem.state = autoEnter ? .on : .off
-        menu.addItem(afterPasteItem)
-
         let interactionItem = makeMenuItem(
             title: "Interaction",
             symbolName: "hand.tap",
@@ -355,6 +325,16 @@ final class StatusController {
 
         interactionItem.submenu = interactionSubmenu
         menu.addItem(interactionItem)
+
+        addOutputItems()
+
+        let afterPasteItem = makeMenuItem(
+            title: "Press Return After Paste",
+            symbolName: "return",
+            action: #selector(toggleAutoEnter)
+        )
+        afterPasteItem.state = autoEnter ? .on : .off
+        menu.addItem(afterPasteItem)
         menu.addItem(NSMenuItem.separator())
     }
 
@@ -889,14 +869,6 @@ final class StatusController {
         defaultOutputProfile.target = target
         rebuildMenu()
         onSetDefaultOutputProfile?(defaultOutputProfile)
-    }
-
-    @objc private func checkForUpdates() {
-        onCheckForUpdates?()
-    }
-
-    @objc private func openWebsite() {
-        NSWorkspace.shared.open(AppConfig.websiteURL)
     }
 
     @objc private func quitApp() {

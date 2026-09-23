@@ -79,7 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusController.onQuit = { NSApp.terminate(nil) }
         statusController.onOpenSettings = { [weak self] in
-            let controller = self?.settingsWindowController ?? SettingsWindowController()
+            let checkForUpdates = self?.updaterController.map { updaterController in
+                { updaterController.updater.checkForUpdates() }
+            }
+            let controller = self?.settingsWindowController ?? SettingsWindowController(
+                onCheckForUpdates: checkForUpdates
+            )
             self?.settingsWindowController = controller
             controller.onConfigChanged = { [weak self] config in
                 self?.config = config
@@ -137,9 +142,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 userDriverDelegate: nil
             )
             self.updaterController = updaterController
-            statusController.onCheckForUpdates = {
-                updaterController.updater.checkForUpdates()
-            }
         }
         statusController.setStatus(config.pairedDeviceIDs.isEmpty ? "Pair XC" : "Ready")
         coordinator.start()

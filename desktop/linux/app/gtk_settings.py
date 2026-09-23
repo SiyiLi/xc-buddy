@@ -13,6 +13,8 @@ def show_settings(
     config: Any,
     on_save: Callable[[], None],
     on_open_config: Callable[[], None],
+    on_website: Callable[[], None],
+    on_check_updates: Callable[[int], None] | None,
     activation_time: int = 0,
 ):
     """Port of SettingsWindowController.swift using native GTK widgets."""
@@ -219,14 +221,46 @@ def show_settings(
     row(advanced_page, "Audio Folder", directory_row)
     notebook.append_page(advanced_page, Gtk.Label(label="Device & Advanced"))
 
+    about_page = page()
+    identity = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+    icon_path = Path(__file__).with_name("icons") / "AppIcon.png"
+    if icon_path.is_file():
+        import gi
+
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(icon_path), 72, 72, True)
+        identity.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
+    identity_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    app_name = _label(Gtk, "XC Buddy")
+    app_name.get_style_context().add_class("heading")
+    version = _label(Gtk, f"Version: {package_version()}", secondary=True)
+    identity_text.pack_start(app_name, False, False, 0)
+    identity_text.pack_start(version, False, False, 0)
+    identity.pack_start(identity_text, False, False, 0)
+    about_page.pack_start(identity, False, False, 0)
+
+    about_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    website_button = Gtk.Button.new_with_label("Website")
+    website_button.connect("clicked", lambda _button: on_website())
+    about_actions.pack_start(website_button, False, False, 0)
+    if on_check_updates is not None:
+        update_button = Gtk.Button.new_with_label("Check for App Updates...")
+        update_button.connect(
+            "clicked",
+            lambda _button: on_check_updates(Gtk.get_current_event_time()),
+        )
+        about_actions.pack_start(update_button, False, False, 0)
+    about_page.pack_start(about_actions, False, False, 0)
+    notebook.append_page(about_page, Gtk.Label(label="About"))
+
     footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     open_button = Gtk.Button.new_with_label("Open Config Folder")
-    version = _label(Gtk, f"Version: {package_version()}", secondary=True)
     status = _label(Gtk, "", secondary=True)
     save_button = Gtk.Button.new_with_label("Save")
     save_button.get_style_context().add_class("suggested-action")
     footer.pack_start(open_button, False, False, 0)
-    footer.pack_start(version, False, False, 0)
     footer.pack_start(status, True, True, 0)
     footer.pack_start(save_button, False, False, 0)
     root.pack_end(footer, False, False, 0)

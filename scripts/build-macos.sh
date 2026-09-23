@@ -11,6 +11,8 @@
 #   SPARKLE_PUBLIC_ED_KEY=<public key from Sparkle generate_keys>
 #   SPARKLE_PRIVATE_ED_KEY=<private key exported by Sparkle generate_keys -x>
 #   CODESIGN_IDENTITY=<Developer ID identity; defaults to ad-hoc signing>
+#   XC_BUDDY_ARCHS="arm64 x86_64"
+#   XC_BUDDY_ALLOW_INSECURE_LOCAL_APPCAST=1
 
 set -euo pipefail
 
@@ -21,7 +23,7 @@ BUILD_DIR="$ROOT_DIR/build"
 PLIST="$DESKTOP_DIR/Sources/XCBuddy/Info.plist"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 CONFIG="${1:---release}"
-TARGET_ARCHS="arm64 x86_64"
+TARGET_ARCHS="${XC_BUDDY_ARCHS:-arm64 x86_64}"
 DEFAULT_APPCAST_URL="https://raw.githubusercontent.com/SiyiLi/xc-buddy/main/website/public/appcast.xml"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
@@ -33,6 +35,9 @@ case "$CONFIG" in
     --debug)
         SWIFT_CONFIG="debug"
         REQUIRE_UPDATE_SIGNATURE=0
+        if [ -z "${XC_BUDDY_ARCHS:-}" ] && [[ "$(xcode-select -p)" == */CommandLineTools ]]; then
+            TARGET_ARCHS="$(uname -m)"
+        fi
         ;;
     *)
         echo "Usage: $0 [--release|--debug]"
@@ -45,14 +50,27 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
+for ARCH in $TARGET_ARCHS; do
+    case "$ARCH" in
+        arm64|x86_64) ;;
+        *)
+            echo "Error: unsupported macOS architecture: $ARCH"
+            exit 1
+            ;;
+    esac
+done
+
 APPCAST_URL="${XC_BUDDY_APPCAST_URL:-$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST")}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_ED_KEY:-$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST")}"
 APPCAST_URL="${APPCAST_URL:-$DEFAULT_APPCAST_URL}"
 
 if [ "$REQUIRE_UPDATE_SIGNATURE" -eq 1 ]; then
     if [[ "$APPCAST_URL" != https://* ]]; then
-        echo "Error: a release build requires an HTTPS Sparkle appcast URL."
-        exit 1
+        if [ "${XC_BUDDY_ALLOW_INSECURE_LOCAL_APPCAST:-0}" != "1" ] ||
+            ! [[ "$APPCAST_URL" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/ ]]; then
+            echo "Error: a release build requires an HTTPS Sparkle appcast URL."
+            exit 1
+        fi
     fi
     if ! [[ "$SPARKLE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
         echo "Error: a release build requires a valid SPARKLE_PUBLIC_ED_KEY."
@@ -65,9 +83,10 @@ mkdir -p "$BUILD_DIR"
 
 echo "===================================="
 echo " XC Buddy macOS Build v$VERSION"
-echo " Universal Binary: $TARGET_ARCHS"
+echo " Architectures: $TARGET_ARCHS"
 echo "===================================="
 
+BUILD_EXECUTABLES=()
 for ARCH in $TARGET_ARCHS; do
     echo ""
     echo "Building XCBuddy for $ARCH..."
@@ -78,20 +97,22 @@ for ARCH in $TARGET_ARCHS; do
         -c "$SWIFT_CONFIG" \
         --arch "$ARCH" \
         --scratch-path "$SCRATCH"
+    EXECUTABLE="$(find "$SCRATCH" -type f -name XCBuddy -perm -111 -print -quit)"
+    if [ -z "$EXECUTABLE" ]; then
+        echo "Error: XCBuddy executable was not found for $ARCH."
+        exit 1
+    fi
+    BUILD_EXECUTABLES+=("$EXECUTABLE")
 done
 
 APP_DIR="$BUILD_DIR/XC-Buddy-${VERSION}.app"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Contents/Frameworks"
 
-ARM_BUILD="$DESKTOP_DIR/.build-arm64/arm64-apple-macosx/$SWIFT_CONFIG"
-X86_BUILD="$DESKTOP_DIR/.build-x86_64/x86_64-apple-macosx/$SWIFT_CONFIG"
-
 echo ""
-echo "Creating universal executable..."
+echo "Creating packaged executable..."
 lipo -create \
-    "$ARM_BUILD/XCBuddy" \
-    "$X86_BUILD/XCBuddy" \
+    "${BUILD_EXECUTABLES[@]}" \
     -output "$APP_DIR/Contents/MacOS/XCBuddy"
 
 cp "$PLIST" "$APP_DIR/Contents/Info.plist"
@@ -119,17 +140,16 @@ else
     exit 1
 fi
 
-SIGN_OPTIONS=()
-if [ "$CODESIGN_IDENTITY" != "-" ]; then
-    SIGN_OPTIONS+=(--options runtime --timestamp)
-fi
-
 sign_code() {
     local path="$1"
     shift
     if [ -e "$path" ]; then
-        codesign --force "${SIGN_OPTIONS[@]}" "$@" \
-            --sign "$CODESIGN_IDENTITY" "$path"
+        if [ "$CODESIGN_IDENTITY" = "-" ]; then
+            codesign --force "$@" --sign "$CODESIGN_IDENTITY" "$path"
+        else
+            codesign --force --options runtime --timestamp "$@" \
+                --sign "$CODESIGN_IDENTITY" "$path"
+        fi
     fi
 }
 

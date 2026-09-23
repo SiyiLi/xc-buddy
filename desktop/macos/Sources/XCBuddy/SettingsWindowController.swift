@@ -27,12 +27,14 @@ final class SettingsWindowController: NSWindowController {
     private let relayURLField = NSTextField()
     private let relaySenderTokenField = NSSecureTextField()
     private let relayReceiverTokenField = NSSecureTextField()
+    private let onCheckForUpdates: (() -> Void)?
     var onConfigChanged: ((AppConfig) -> Void)?
 
     private var config: AppConfig
 
-    init(config: AppConfig = AppConfig.load()) {
+    init(config: AppConfig = AppConfig.load(), onCheckForUpdates: (() -> Void)? = nil) {
         self.config = config
+        self.onCheckForUpdates = onCheckForUpdates
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 640),
             styleMask: [.titled, .closable, .miniaturizable],
@@ -109,7 +111,53 @@ final class SettingsWindowController: NSWindowController {
             stack.addArrangedSubview(self.row(label: "Audio Cache", control: self.debugAudioButton))
             stack.addArrangedSubview(self.row(label: "Audio Folder", control: self.debugAudioDirectoryControl()))
         })
+        tabView.addTabViewItem(makeTab(title: "About") { stack in
+            let identity = NSStackView()
+            identity.orientation = .horizontal
+            identity.alignment = .centerY
+            identity.spacing = 16
+
+            let iconView = NSImageView()
+            iconView.image = NSApp.applicationIconImage
+            iconView.imageScaling = .scaleProportionallyUpOrDown
+            iconView.widthAnchor.constraint(equalToConstant: 72).isActive = true
+            iconView.heightAnchor.constraint(equalToConstant: 72).isActive = true
+
+            let identityText = NSStackView()
+            identityText.orientation = .vertical
+            identityText.alignment = .leading
+            identityText.spacing = 6
+            let appName = NSTextField(labelWithString: "XC Buddy")
+            appName.font = .systemFont(ofSize: 18, weight: .semibold)
+            self.versionLabel.stringValue = "Version: \(Self.applicationVersion)"
+            self.versionLabel.textColor = .secondaryLabelColor
+            identityText.addArrangedSubview(appName)
+            identityText.addArrangedSubview(self.versionLabel)
+
+            identity.addArrangedSubview(iconView)
+            identity.addArrangedSubview(identityText)
+            stack.addArrangedSubview(identity)
+
+            let actions = NSStackView()
+            actions.orientation = .horizontal
+            actions.alignment = .centerY
+            actions.spacing = 10
+            actions.addArrangedSubview(NSButton(
+                title: "Website",
+                target: self,
+                action: #selector(openWebsite)
+            ))
+            if self.onCheckForUpdates != nil {
+                actions.addArrangedSubview(NSButton(
+                    title: "Check for App Updates...",
+                    target: self,
+                    action: #selector(checkForUpdates)
+                ))
+            }
+            stack.addArrangedSubview(actions)
+        })
         root.addArrangedSubview(tabView)
+        tabView.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         tabView.heightAnchor.constraint(equalToConstant: 520).isActive = true
 
         let buttonRow = NSStackView()
@@ -117,14 +165,11 @@ final class SettingsWindowController: NSWindowController {
         buttonRow.alignment = .centerY
         buttonRow.spacing = 10
         let openFolderButton = NSButton(title: "Open Config Folder", target: self, action: #selector(openConfigFolder))
-        versionLabel.stringValue = "Version: \(Self.applicationVersion)"
-        versionLabel.textColor = .secondaryLabelColor
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
         saveButton.keyEquivalent = "\r"
         buttonRow.addArrangedSubview(openFolderButton)
-        buttonRow.addArrangedSubview(versionLabel)
         buttonRow.addArrangedSubview(statusLabel)
         buttonRow.addArrangedSubview(spacer)
         buttonRow.addArrangedSubview(saveButton)
@@ -296,6 +341,14 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func openConfigFolder() {
         AppConfig.openConfigDirectory()
+    }
+
+    @objc private func openWebsite() {
+        NSWorkspace.shared.open(AppConfig.websiteURL)
+    }
+
+    @objc private func checkForUpdates() {
+        onCheckForUpdates?()
     }
 
     private func showErrorAlert(title: String, message: String) {
