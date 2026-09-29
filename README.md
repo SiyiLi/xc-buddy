@@ -315,11 +315,12 @@ tool, private signing key, or update signature is unavailable. To publish the
 Mac update through GitHub Actions, set the repository Actions secret
 `SPARKLE_PRIVATE_ED_KEY` from the **same key pair used by the existing Mac
 app**. The workflow reads the matching public key from the published 0.2.3 Mac
-ZIP. Never put the private key in the repo or a chat. Run **Publish macOS app
-update** with the existing `app-v<version>` tag. It builds the Apple-silicon
-ZIP, attaches the ZIP and signature to that GitHub Release, and updates the
-appcast on `main` from the uploaded assets. Rerunning it after both assets
-exist only retries the appcast publication.
+ZIP. Never put the private key in the repo or a chat. Pushing an `app-v<version>`
+tag publishes the Ubuntu archive first, then builds and attaches the
+Apple-silicon ZIP and signature to the same release and updates the appcast on
+`main`. If only the Mac stage needs a retry, run **Publish macOS app update**
+with that tag. Rerunning it after both Mac assets exist only retries the
+appcast publication.
 
 For a release built on your own Mac instead, attach the ZIP and signature to
 the corresponding app release, then pass its URL, byte length, and signature
@@ -376,7 +377,8 @@ development tools, not acceptance builds.
 
 The builder also creates a runtime-specific release archive named like
 `xc-buddy-linux-x86_64-py310-0.2.2.tar.gz` plus its checksum. Pushing the
-matching `app-v0.2.2` tag builds, tests, and publishes that Python 3.10 archive.
+matching `app-v0.2.2` tag builds, tests, and publishes that Python 3.10 archive,
+then publishes the macOS app assets.
 App releases use their own prerelease channel so GitHub's stable latest release
 continues to identify firmware. The installed app downloads the matching
 archive, verifies its release checksum and every internal artifact checksum,

@@ -1,4 +1,4 @@
-name: Release Ubuntu app
+name: Release app
 
 on:
   push:
@@ -61,5 +61,13 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$archive" "$checksum" \
             --verify-tag \
             --prerelease \
-            --title "XC Buddy App ${GITHUB_REF_NAME#app-v} (Ubuntu)" \
-            --notes "Private-use Ubuntu application release."
+            --title "XC Buddy App ${GITHUB_REF_NAME#app-v}" \
+            --notes "Private-use application release."
+
+  macos:
+    needs: release
+    uses: ./.github/workflows/macos-app-release.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
