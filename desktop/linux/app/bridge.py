@@ -97,14 +97,15 @@ class CodexBridge:
                 for k, v in [line.split(":", 1)]
             }
             length = int(fields.get("content-length", "0"))
+            scheme, separator, credential = fields.get("authorization", "").partition(
+                " "
+            )
             if length > 1_048_576:
                 status, reason, body = 413, "Payload Too Large", b"request too large"
             elif not lines[0].startswith("POST "):
                 status, reason, body = 405, "Method Not Allowed", b"POST required"
-            elif (
-                self.token
-                and fields.get("authorization", "").lower()
-                != f"bearer {self.token}".lower()
+            elif self.token and (
+                not separator or scheme.lower() != "bearer" or credential != self.token
             ):
                 status, reason, body = 401, "Unauthorized", b"unauthorized"
             else:

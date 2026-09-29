@@ -591,6 +591,38 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"204 No Content", response)
         self.assertEqual(events, [("done", "")])
 
+    async def test_bearer_scheme_case_does_not_change_token_case(self):
+        events = []
+        bridge = CodexBridge(
+            0, "SecretABC", lambda event, message: events.append(event)
+        )
+        await bridge.start()
+        port = bridge.server.sockets[0].getsockname()[1]
+
+        async def request(authorization):
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            body = b'{"type":"agent-turn-complete"}'
+            writer.write(
+                b"POST / HTTP/1.1\r\nAuthorization: "
+                + authorization
+                + b"\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+            response = await reader.read()
+            writer.close()
+            await writer.wait_closed()
+            return response
+
+        try:
+            self.assertIn(b"401 Unauthorized", await request(b"Bearer secretabc"))
+            self.assertIn(b"204 No Content", await request(b"bEaReR SecretABC"))
+            self.assertEqual(events, ["done"])
+        finally:
+            await bridge.stop()
+
     def test_classification(self):
         self.assertEqual(
             classify_event({"type": "tool-call-start"})[0], "tool_call_started"
@@ -1037,6 +1069,44 @@ class InputTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "rejected keyboard event"):
             InputInjector._atspi_event(atspi, 55, object())
 
+    def test_wayland_paste_failure_restores_clipboard(self):
+        injector = InputInjector()
+        restore = mock.Mock()
+        with mock.patch.object(
+            injector, "_wayland_clipboard", return_value=restore
+        ), mock.patch.object(
+            injector, "_is_gnome_wayland", return_value=True
+        ), mock.patch.object(
+            injector, "_focused_accessible_application", return_value=""
+        ), mock.patch.object(
+            injector, "_atspi_paste", side_effect=RuntimeError("paste failed")
+        ), mock.patch("app.input.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "paste failed"):
+                injector._wayland("temporary", False)
+        restore.assert_called_once_with()
+
+    def test_x11_paste_failure_restores_clipboard(self):
+        injector = InputInjector()
+        with mock.patch("app.input.shutil.which", return_value="installed"), mock.patch(
+            "app.input.subprocess.run"
+        ) as run, mock.patch.object(injector, "_clipboard_matches", return_value=True):
+            run.side_effect = [
+                mock.Mock(stdout=b"previous"),
+                mock.Mock(),
+                RuntimeError("paste failed"),
+                mock.Mock(),
+            ]
+            with self.assertRaisesRegex(RuntimeError, "paste failed"):
+                injector._x11("temporary", False)
+        self.assertEqual(
+            run.call_args_list[-1],
+            mock.call(
+                ["xclip", "-selection", "clipboard", "-i"],
+                input=b"previous",
+                check=False,
+            ),
+        )
+
     @mock.patch("app.input.shutil.which")
     def test_wayland_compositor_wins_over_xwayland_for_codex_detection(self, which):
         which.side_effect = lambda command: (
@@ -1129,56 +1199,6 @@ class DesktopStartupTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DesktopUITests(unittest.TestCase):
-    def test_start_tray_uses_status_notifier(self):
-        ui = DesktopUI.__new__(DesktopUI)
-        menu = object()
-        tray = mock.Mock()
-        tray.start = mock.AsyncMock(return_value=True)
-        ui._menu = mock.Mock(return_value=menu)
-        ui._refresh = mock.Mock()
-        ui._show_control_window = mock.Mock()
-
-        with mock.patch(
-            "app.native_indicator.NativeIndicator", return_value=tray
-        ) as native:
-            asyncio.run(ui.start_tray())
-
-        native.assert_called_once_with("xc-buddy", "XC Buddy", menu)
-        tray.start.assert_awaited_once_with()
-        self.assertIs(ui.tray, tray)
-        ui._refresh.assert_called_once_with()
-        ui._show_control_window.assert_not_called()
-
-    def test_start_tray_keeps_indicator_alive_while_showing_fallback(self):
-        ui = DesktopUI.__new__(DesktopUI)
-        menu = object()
-        tray = mock.Mock()
-        tray.start = mock.AsyncMock(return_value=False)
-        tray.registration_error = "no watcher"
-        ui._menu = mock.Mock(return_value=menu)
-        ui._refresh = mock.Mock()
-        ui._show_control_window = mock.Mock()
-
-        with self.assertLogs("app.ui", "WARNING"):
-            with mock.patch("app.native_indicator.NativeIndicator", return_value=tray):
-                asyncio.run(ui.start_tray())
-
-        self.assertIs(ui.tray, tray)
-        ui._refresh.assert_called_once_with()
-        ui._show_control_window.assert_called_once_with()
-
-    def test_tray_connection_changes_switch_the_fallback_window(self):
-        ui = DesktopUI.__new__(DesktopUI)
-        window = ui._control_window = mock.Mock()
-        ui._show_control_window = mock.Mock()
-
-        ui._tray_connection_changed(True)
-
-        window.destroy.assert_called_once_with()
-        self.assertIsNone(ui._control_window)
-        ui._tray_connection_changed(False)
-        ui._show_control_window.assert_called_once_with()
-
     def test_overlay_scale_uses_the_same_bounded_ui_scale_as_app_windows(self):
         with mock.patch.dict(os.environ, {"XC_BUDDY_UI_SCALE": "1.135"}, clear=True):
             self.assertEqual(ui_scale(), 1.135)

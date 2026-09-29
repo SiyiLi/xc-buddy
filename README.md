@@ -376,6 +376,10 @@ and restarts through the stable launcher.
 
 Ubuntu normally provides the StatusNotifier host through its AppIndicator
 extension. GNOME Shell owns the tray popup, including outside-click dismissal.
+If the host is absent while the screen is locked, XC Buddy keeps BLE and relay
+work running and registers its icon when the host returns after unlock. If the
+icon remains absent after unlock, check that Ubuntu AppIndicators is enabled in
+GNOME Extensions; XC Buddy records watcher failures in its log.
 The Linux app uses native GTK windows for Settings, Pairing, firmware progress,
 app updates, and device controls. App updates are enabled only for a standard
 immutable per-user installation; source runs never modify their environment.

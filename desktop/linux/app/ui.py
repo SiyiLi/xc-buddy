@@ -137,7 +137,6 @@ class DesktopUI:
         self._app_update_window: Any = None
         self._settings_window: Any = None
         self._pairing_window: Any = None
-        self._control_window: Any = None
         self._device_windows: dict[str, Any] = {}
         self._pending_window_activation_time = 0
 
@@ -158,12 +157,10 @@ class DesktopUI:
             logger.warning(
                 "StatusNotifier tray unavailable: %s", tray.registration_error
             )
-            self._show_control_window()
         except Exception as error:
             logger.warning("StatusNotifier tray unavailable: %s", error)
             self._menu_api = None
             self.tray = None
-            self._show_control_window()
 
     def _menu(self, menu_api=None):
         if menu_api is None:
@@ -823,81 +820,11 @@ class DesktopUI:
         device_window.window.show_all()
         device_window.present(activation_time)
 
-    def _show_control_window(self, activation_time: int = 0) -> None:
-        """Keep basic controls available on desktops without a tray host."""
-        if self._control_window is not None:
-            present_from_tray(self._control_window, activation_time)
-            return
-
-        from .gtk_layout import apply_typography, scale_window
-        from .gtk_onboarding import _gtk_module, _label
-
-        Gtk = _gtk_module()
-        window = Gtk.Window(title="XC Buddy")
-        window.set_default_size(420, 230)
-        window.set_size_request(420, 230)
-        scale_window(window, 420, 230)
-        apply_typography(Gtk, window)
-        window.set_resizable(False)
-        window.set_position(Gtk.WindowPosition.CENTER)
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        page.set_margin_top(20)
-        page.set_margin_bottom(20)
-        page.set_margin_start(22)
-        page.set_margin_end(22)
-        window.add(page)
-        title = _label(Gtk, "XC Buddy")
-        title.get_style_context().add_class("heading")
-        page.pack_start(title, False, False, 0)
-        page.pack_start(
-            _label(Gtk, "System tray unavailable", secondary=True),
-            False,
-            False,
-            0,
-        )
-        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        for label, callback in (
-            ("Pair Device…", self.on_pair),
-            ("Settings…", self.on_settings),
-            ("Restore Last Input", self.on_restore),
-        ):
-            button = Gtk.Button.new_with_label(label)
-            button.connect(
-                "clicked", lambda _button, callback=callback: self.call(callback)
-            )
-            actions.pack_start(button, False, False, 0)
-        page.pack_start(actions, False, False, 0)
-        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        quit_button = Gtk.Button.new_with_label("Quit")
-        quit_button.connect("clicked", lambda _button: self.call(self.on_quit))
-        footer.pack_end(quit_button, False, False, 0)
-        page.pack_end(footer, False, False, 0)
-
-        self._control_window = window
-        self._gtk_windows.append(window)
-
-        def closed(window) -> None:
-            if window in self._gtk_windows:
-                self._gtk_windows.remove(window)
-            if self._control_window is window:
-                self._control_window = None
-
-        window.connect("destroy", closed)
-        window.show_all()
-        present_from_tray(window, activation_time)
-
-    def _hide_control_window(self) -> None:
-        window = self._control_window
-        if window is None:
-            return
-        self._control_window = None
-        window.destroy()
-
     def _tray_connection_changed(self, connected: bool) -> None:
         if connected:
-            self._hide_control_window()
+            logger.info("StatusNotifier tray connected")
         else:
-            self._show_control_window()
+            logger.warning("StatusNotifier tray disconnected; waiting for watcher")
 
     async def choose_device(
         self,
@@ -1644,9 +1571,6 @@ class DesktopUI:
         for device_window in tuple(self._device_windows.values()):
             device_window.window.destroy()
         self._device_windows.clear()
-        if self._control_window is not None:
-            self._control_window.destroy()
-            self._control_window = None
         if self._runtime_presenter is not None:
             self._runtime_presenter.destroy()
             self._runtime_presenter = None

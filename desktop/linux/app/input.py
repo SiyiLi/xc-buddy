@@ -204,40 +204,44 @@ class InputInjector:
             subprocess.SubprocessError,
         ) as error:
             raise InputError(f"Wayland clipboard failed: {error}") from error
-        if self._is_gnome_wayland():
-            focused = self._focused_accessible_application()
-            try:
-                # GNOME requests Wayland clipboard data asynchronously. Give
-                # wl-copy ownership time to propagate before synthesizing the
-                # paste accelerator.
-                time.sleep(0.2)
-                self._atspi_paste(
-                    press_enter,
-                    terminal=self._requires_terminal_paste(focused),
+        try:
+            if self._is_gnome_wayland():
+                focused = self._focused_accessible_application()
+                try:
+                    # GNOME requests Wayland clipboard data asynchronously. Give
+                    # wl-copy ownership time to propagate before synthesizing the
+                    # paste accelerator.
+                    time.sleep(0.2)
+                    self._atspi_paste(
+                        press_enter,
+                        terminal=self._requires_terminal_paste(focused),
+                    )
+                except (
+                    ImportError,
+                    OSError,
+                    RuntimeError,
+                    subprocess.SubprocessError,
+                ) as error:
+                    raise InputError(f"GNOME Wayland paste failed: {error}") from error
+            elif shutil.which("wtype"):
+                subprocess.run(
+                    ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], check=True
                 )
-            except (
-                ImportError,
-                OSError,
-                RuntimeError,
-                subprocess.SubprocessError,
-            ) as error:
-                raise InputError(f"GNOME Wayland paste failed: {error}") from error
-        elif shutil.which("wtype"):
-            subprocess.run(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], check=True)
-            if press_enter:
-                time.sleep(0.12)
-                subprocess.run(["wtype", "-k", "Return"], check=True)
-        elif shutil.which("ydotool"):
-            subprocess.run(
-                ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"], check=True
-            )
-            if press_enter:
-                time.sleep(0.12)
-                subprocess.run(["ydotool", "key", "28:1", "28:0"], check=True)
-        else:
-            raise InputError("Wayland input needs wtype or ydotool")
-        time.sleep(0.08 if press_enter else 0.2)
-        restore_clipboard()
+                if press_enter:
+                    time.sleep(0.12)
+                    subprocess.run(["wtype", "-k", "Return"], check=True)
+            elif shutil.which("ydotool"):
+                subprocess.run(
+                    ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"], check=True
+                )
+                if press_enter:
+                    time.sleep(0.12)
+                    subprocess.run(["ydotool", "key", "28:1", "28:0"], check=True)
+            else:
+                raise InputError("Wayland input needs wtype or ydotool")
+            time.sleep(0.08 if press_enter else 0.2)
+        finally:
+            restore_clipboard()
 
     def _wayland_clipboard(self, text: str):
         if shutil.which("wl-copy") and shutil.which("wl-paste"):
@@ -432,11 +436,6 @@ class InputInjector:
             )
         else:
             raise InputError("X11 input needs xclip or xsel")
-        subprocess.run(["xdotool", "key", "--clearmodifiers", "ctrl+v"], check=True)
-        if press_enter:
-            time.sleep(0.12)
-            subprocess.run(["xdotool", "key", "--clearmodifiers", "Return"], check=True)
-        time.sleep(0.08 if press_enter else 0.2)
         restore = (
             [clipboard, "-selection", "clipboard", "-i"]
             if clipboard == "xclip"
@@ -447,8 +446,17 @@ class InputInjector:
             if clipboard == "xclip"
             else [clipboard, "--clipboard", "--output"]
         )
-        if self._clipboard_matches(read, text):
-            subprocess.run(restore, input=old, check=False)
+        try:
+            subprocess.run(["xdotool", "key", "--clearmodifiers", "ctrl+v"], check=True)
+            if press_enter:
+                time.sleep(0.12)
+                subprocess.run(
+                    ["xdotool", "key", "--clearmodifiers", "Return"], check=True
+                )
+            time.sleep(0.08 if press_enter else 0.2)
+        finally:
+            if self._clipboard_matches(read, text):
+                subprocess.run(restore, input=old, check=False)
 
     @staticmethod
     def _clipboard_matches(command: list[str], expected: str) -> bool:

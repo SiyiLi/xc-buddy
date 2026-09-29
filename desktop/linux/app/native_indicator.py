@@ -10,6 +10,7 @@ annotation-name checks.
 import asyncio
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -475,7 +476,7 @@ class NativeIndicator:
         self._registered = False
         self.registration_error: str | None = None
         self.on_connection_changed: Callable[[bool], None] = lambda _connected: None
-        self._bus_name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
+        self._bus_name = f"org.kde.StatusNotifierItem-{os.getpid()}-{uuid.uuid4().int}"
         self.activation_time = 0
 
     async def start(self) -> bool:
