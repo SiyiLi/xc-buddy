@@ -311,11 +311,20 @@ build/XC-Buddy-<version>.signature
 ```
 
 It fails instead of producing a release when the public key, Sparkle signing
-tool, private Keychain key, or update signature is unavailable. Attach the ZIP
-to the corresponding app release, then pass its URL, byte length, and the
-contents of the `.signature` file to `scripts/update-appcast.py`. Commit and
-publish the resulting `website/public/appcast.xml` only after the release asset
-is available.
+tool, private signing key, or update signature is unavailable. To publish the
+Mac update through GitHub Actions, set the repository Actions secret
+`SPARKLE_PRIVATE_ED_KEY` from the **same key pair used by the existing Mac
+app**. The workflow reads the matching public key from the published 0.2.3 Mac
+ZIP. Never put the private key in the repo or a chat. Run **Publish macOS app
+update** with the existing `app-v<version>` tag. It builds the Apple-silicon
+ZIP, attaches the ZIP and signature to that GitHub Release, and updates the
+appcast on `main` from the uploaded assets. Rerunning it after both assets
+exist only retries the appcast publication.
+
+For a release built on your own Mac instead, attach the ZIP and signature to
+the corresponding app release, then pass its URL, byte length, and signature
+to `scripts/update-appcast.py`. Publish `website/public/appcast.xml` only after
+the release assets are available.
 
 Before accepting the update path, install one older ZIP on a real Mac, approve
 it once, and update it to a newer test version through **Check for App

@@ -1,0 +1,162 @@
+name: Publish macOS app update
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing app release tag, for example app-v0.2.4
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Check release and signing configuration
+        id: preflight
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION is not a release version."
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != "app-v$version" ]]; then
+            echo "The release tag does not match VERSION."
+            exit 1
+          fi
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' desktop/macos/Sources/XCBuddy/Info.plist)"
+          short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' desktop/macos/Sources/XCBuddy/Info.plist)"
+          if [[ "$bundle_version" != "$version" || "$short_version" != "$version" ]]; then
+            echo "The Mac bundle versions do not match VERSION."
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" >/dev/null
+          archive="XC-Buddy-$version.zip"
+          signature="XC-Buddy-$version.signature"
+          assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          archive_exists=false
+          signature_exists=false
+          if grep -Fxq "$archive" <<< "$assets"; then archive_exists=true; fi
+          if grep -Fxq "$signature" <<< "$assets"; then signature_exists=true; fi
+          if [[ "$archive_exists" != "$signature_exists" ]]; then
+            echo "The Mac release has only one of the ZIP and signature assets."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "assets_present=$archive_exists" >> "$GITHUB_OUTPUT"
+
+      - name: Read public key from the existing Mac release
+        if: steps.preflight.outputs.assets_present == 'false'
+        id: key
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          key_dir="$RUNNER_TEMP/xc-buddy-existing-mac-key"
+          mkdir -p "$key_dir"
+          gh release download app-v0.2.3 \
+            --pattern XC-Buddy-0.2.3.zip --dir "$key_dir"
+          unzip -p "$key_dir/XC-Buddy-0.2.3.zip" \
+            'XC Buddy.app/Contents/Info.plist' > "$key_dir/Info.plist"
+          public_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$key_dir/Info.plist")"
+          if [[ ! "$public_key" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+            echo "The existing Mac release has no valid Sparkle public key."
+            exit 1
+          fi
+          echo "public_key=$public_key" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed Mac app
+        if: steps.preflight.outputs.assets_present == 'false'
+        shell: bash
+        env:
+          XC_BUDDY_ARCHS: arm64
+          SPARKLE_PUBLIC_ED_KEY: ${{ steps.key.outputs.public_key }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_PRIVATE_ED_KEY" || -z "$SPARKLE_PUBLIC_ED_KEY" ]]; then
+            echo "Set the Sparkle private-key secret."
+            exit 1
+          fi
+          scripts/build-macos.sh --release
+
+      - name: Attach Mac update to the existing app release
+        if: steps.preflight.outputs.assets_present == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          gh release upload "$RELEASE_TAG" \
+            "build/XC-Buddy-$version.zip" \
+            "build/XC-Buddy-$version.signature"
+
+      - name: Publish Sparkle appcast from the release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          archive="XC-Buddy-$version.zip"
+          signature_name="XC-Buddy-$version.signature"
+          assets_dir="$RUNNER_TEMP/xc-buddy-release-assets"
+          mkdir -p "$assets_dir"
+          gh release download "$RELEASE_TAG" \
+            --pattern "$archive" --pattern "$signature_name" \
+            --dir "$assets_dir"
+          signature="$(tr -d '\r\n' < "$assets_dir/$signature_name")"
+          if [[ ! "$signature" =~ ^[A-Za-z0-9+/]{86}==$ ]]; then
+            echo "The Mac release signature is invalid."
+            exit 1
+          fi
+          length="$(stat -f%z "$assets_dir/$archive")"
+
+          git fetch origin main:refs/remotes/origin/main
+          git switch --detach origin/main
+          if [[ "$(tr -d '[:space:]' < VERSION)" != "$version" ]]; then
+            echo "Main has moved to another app version; refusing to replace its feed."
+            exit 1
+          fi
+          if grep -Fq "releases/download/$RELEASE_TAG/$archive" website/public/appcast.xml &&
+             grep -Fq "sparkle:version=\"$version\"" website/public/appcast.xml &&
+             grep -Fq "sparkle:edSignature=\"$signature\"" website/public/appcast.xml &&
+             grep -Fq "length=\"$length\"" website/public/appcast.xml; then
+            echo "The Mac appcast already points to $version."
+            exit 0
+          fi
+          python3 scripts/update-appcast.py \
+            --version "$version" \
+            --zip-url "https://github.com/SiyiLi/xc-buddy/releases/download/$RELEASE_TAG/$archive" \
+            --signature "$signature" \
+            --length "$length"
+          git diff --check
+          git add website/public/appcast.xml
+          if git diff --cached --quiet; then
+            echo "The Mac appcast already points to $version."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "Publish macOS appcast for $version" \
+            -m "Point the Sparkle feed at the signed XC Buddy Mac release archive.
+          Use the signature and byte length fetched from the GitHub Release.
+          This makes the already-published app version discoverable on macOS.
+          Keep Ubuntu and macOS on the same application version."
+          git push origin HEAD:main
